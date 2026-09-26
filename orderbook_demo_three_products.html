@@ -1,0 +1,4056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AU / CUS2605 / GC2606 Orderbook</title>
+<script src="https://cdn.bootcdn.net/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+if (typeof d3 === "undefined") {
+    document.write('<script src="https://d3js.org/d3.v7.min.js"><\/script>');
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/apache-arrow@21.1.0/Arrow.es2015.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; }
+body {
+    --font-scale: 1;
+    overflow: hidden;
+    background: #101426;
+    color: #d2d6e2;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: calc(16px * var(--font-scale));
+    user-select: none;
+}
+button, input { font: inherit; }
+#app { display: flex; width: 100vw; height: 100vh; }
+#chart-container {
+    position: relative;
+    flex: 1;
+    min-width: 420px;
+    overflow: hidden;
+    background: #1a1a2e;
+}
+#main-canvas, #overlay-svg {
+    position: absolute;
+    inset: 0;
+    display: block;
+}
+#main-canvas { cursor: crosshair; }
+#overlay-svg { z-index: 5; pointer-events: none; }
+#tooltip {
+    position: absolute;
+    z-index: 10;
+    display: none;
+    min-width: 220px;
+    padding: 7px 10px;
+    border: 1px solid #59617a;
+    border-radius: 4px;
+    background: rgba(5, 8, 20, 0.94);
+    color: #edf0f7;
+    font: calc(11px * var(--font-scale))/1.55 Consolas, monospace;
+    pointer-events: none;
+    white-space: nowrap;
+}
+#snapshot-section {
+    position: absolute;
+    z-index: 18;
+    inset: 14px;
+    display: none;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid #59617a;
+    border-radius: 7px;
+    background: rgba(10, 14, 34, 0.98);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+#snapshot-section.open { display: block; }
+.snapshot-section-header {
+    position: sticky;
+    z-index: 2;
+    top: -12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: -12px -12px 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #30364b;
+    background: #10162f;
+}
+#snapshot-section-title { color: #e0a800; font-size: calc(14px * var(--font-scale)); }
+#snapshot-section-subtitle {
+    margin-left: 12px;
+    color: #8e98b0;
+    font: calc(10px * var(--font-scale)) Consolas, monospace;
+}
+#snapshot-section-close {
+    padding: 3px 9px;
+    border: 1px solid #59617a;
+    border-radius: 4px;
+    background: #202744;
+    color: #e8ebf3;
+    cursor: pointer;
+}
+.snapshot-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(250px, 1fr));
+    gap: 10px;
+    min-width: 790px;
+}
+.snapshot-column {
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid #2d3655;
+    border-radius: 5px;
+    background: #0d132c;
+}
+.snapshot-column.primary { border-color: #e0a800; }
+.snapshot-column-title {
+    position: sticky;
+    z-index: 1;
+    top: 35px;
+    margin: -8px -8px 8px;
+    padding: 8px;
+    background: #121936;
+    font-size: calc(13px * var(--font-scale));
+    font-weight: 700;
+}
+.snapshot-cell {
+    margin-bottom: 8px;
+    padding: 6px;
+    border: 1px solid #293250;
+    border-radius: 4px;
+    background: #0f1530;
+}
+.snapshot-cell.zero { border-color: #e0a800; }
+.snapshot-cell.unavailable { opacity: 0.45; }
+.snapshot-cell-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 3px;
+    font: calc(9px * var(--font-scale)) Consolas, monospace;
+}
+.snapshot-offset { color: #ffd166; font-weight: 700; }
+.snapshot-dt {
+    overflow: hidden;
+    color: #939cb2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snapshot-cell canvas {
+    position: static;
+    display: block;
+    width: 100%;
+    height: 150px;
+}
+.snapshot-missing {
+    display: grid;
+    height: 150px;
+    place-items: center;
+    color: #727b91;
+    font: calc(11px * var(--font-scale)) Consolas, monospace;
+}
+#loading {
+    position: absolute;
+    z-index: 20;
+    left: 50%;
+    top: 50%;
+    width: min(520px, calc(100% - 40px));
+    padding: 22px;
+    transform: translate(-50%, -50%);
+    border: 1px solid #39415c;
+    border-radius: 7px;
+    background: rgba(15, 21, 48, 0.97);
+    text-align: center;
+    box-shadow: 0 14px 42px rgba(0, 0, 0, 0.4);
+}
+#file-picker-close {
+    position: absolute;
+    top: 9px;
+    right: 10px;
+    display: none;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #59617a;
+    border-radius: 4px;
+    background: #202744;
+    color: #e8ebf3;
+    cursor: pointer;
+}
+#file-picker-close:hover { border-color: #e0a800; }
+#loading h2 { margin-bottom: 10px; color: #e0a800; font-size: calc(16px * var(--font-scale)); }
+#loading p { color: #aab1c3; font-size: calc(12px * var(--font-scale)); line-height: 1.65; }
+#file-picker { display: none; margin-top: 14px; }
+#selected-folder-list {
+    max-height: 120px;
+    overflow-y: auto;
+    margin-top: 10px;
+    color: #cbd1df;
+    font: calc(10px * var(--font-scale))/1.6 Consolas, monospace;
+}
+.selected-folder-empty { color: #7f89a3; }
+.selected-folder-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 3px 5px;
+    border-bottom: 1px solid rgba(89, 97, 122, 0.35);
+}
+.selected-folder-name {
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.selected-folder-name::before {
+    content: "• ";
+    color: #e0a800;
+}
+.remove-folder-button {
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    border: 1px solid #8b4b55;
+    border-radius: 3px;
+    background: #33202a;
+    color: #ff9aa3;
+    cursor: pointer;
+}
+.file-button {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 7px 12px;
+    border: 1px solid #66708f;
+    border-radius: 4px;
+    background: #222a47;
+    color: #f1f3f8;
+    cursor: pointer;
+}
+.file-button + .file-button { margin-left: 8px; }
+.hidden-file-input { display: none; }
+#divider {
+    z-index: 30;
+    width: 5px;
+    flex: 0 0 5px;
+    background: #30364b;
+    cursor: col-resize;
+}
+#divider:hover, #divider.active { background: #e0a800; }
+#detail-panel {
+    width: 390px;
+    min-width: 300px;
+    max-width: 58vw;
+    overflow-y: auto;
+    padding: 12px;
+    background: #16213e;
+    border-left: 1px solid #30364b;
+}
+#detail-panel h3 { color: #e0a800; font-size: calc(14px * var(--font-scale)); }
+.font-controls {
+    display: grid;
+    grid-template-columns: auto minmax(90px, 1fr) 42px auto;
+    align-items: center;
+    gap: 7px;
+    margin-top: 8px;
+    padding: 7px 8px;
+    border: 1px solid #303b5d;
+    border-radius: 5px;
+    background: #111a35;
+    font-size: calc(11px * var(--font-scale));
+}
+.font-controls label { color: #b8c0d3; white-space: nowrap; }
+#font-size-control {
+    width: 100%;
+    accent-color: #e0a800;
+    cursor: pointer;
+}
+#font-size-value {
+    color: #ffd166;
+    font-family: Consolas, monospace;
+    text-align: right;
+}
+#date-controls, #intraday-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+}
+#date-controls label {
+    color: #aeb6ca;
+    font-size: calc(10px * var(--font-scale));
+    white-space: nowrap;
+}
+#date-selection-controls {
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid #303b5d;
+    border-radius: 5px;
+    background: #111a35;
+}
+.date-selection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.date-selection-title {
+    color: #d7dbea;
+    font-size: calc(11px * var(--font-scale));
+    font-weight: 700;
+}
+#selected-dates-summary {
+    overflow: hidden;
+    color: #8e98b0;
+    font: calc(9px * var(--font-scale)) Consolas, monospace;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#date-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 8px;
+    max-height: 116px;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid #30364b;
+    border-radius: 4px;
+    background: #0d132c;
+}
+.date-option {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    color: #c8cedd;
+    font: calc(10px * var(--font-scale)) Consolas, monospace;
+    cursor: pointer;
+}
+.date-option input {
+    flex: 0 0 auto;
+    accent-color: #e0a800;
+}
+.date-selection-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+}
+.date-selection-actions .date-button:first-child { flex: 1; }
+#data-date, #intraday-start-time, #intraday-end-time {
+    min-width: 0;
+    flex: 1;
+    padding: 4px 6px;
+    border: 1px solid #59617a;
+    border-radius: 4px;
+    background: #202744;
+    color: #e8ebf3;
+}
+#intraday-controls.invalid input {
+    border-color: #ff5c69;
+    box-shadow: 0 0 0 1px rgba(255, 92, 105, 0.35);
+}
+#intraday-error {
+    display: none;
+    margin-top: 4px;
+    color: #ff7b86;
+    font-size: calc(10px * var(--font-scale));
+}
+#intraday-error.visible { display: block; }
+.time-wheel {
+    position: relative;
+    min-width: 0;
+    flex: 1;
+}
+.time-wheel input {
+    width: 100%;
+    cursor: pointer;
+}
+.time-wheel-popup {
+    position: absolute;
+    z-index: 100;
+    top: calc(100% + 4px);
+    left: 0;
+    display: none;
+    width: 206px;
+    padding: 8px;
+    border: 1px solid #59617a;
+    border-radius: 5px;
+    background: #10162f;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+.time-wheel-popup.open { display: block; }
+.time-wheel-labels, .time-wheel-columns {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 5px;
+}
+.time-wheel-labels {
+    margin-bottom: 4px;
+    color: #8e98b0;
+    font-size: calc(10px * var(--font-scale));
+    text-align: center;
+}
+.time-wheel-columns select {
+    width: 100%;
+    height: 168px;
+    border: 1px solid #39415c;
+    border-radius: 3px;
+    outline: none;
+    background: #202744;
+    color: #e8ebf3;
+    font: calc(13px * var(--font-scale)) Consolas, monospace;
+    text-align: center;
+}
+.time-wheel-columns option { padding: 5px 2px; }
+.time-wheel-done {
+    width: 100%;
+    margin-top: 7px;
+}
+.date-button {
+    padding: 4px 8px;
+    border: 1px solid #59617a;
+    border-radius: 4px;
+    background: #202744;
+    color: #e8ebf3;
+    cursor: pointer;
+}
+.date-button:hover { border-color: #e0a800; }
+#selected-time {
+    min-height: 18px;
+    margin-top: 4px;
+    color: #aeb6ca;
+    font: calc(10px * var(--font-scale))/1.5 Consolas, monospace;
+}
+#trade-list-panel {
+    margin: 8px 0 10px;
+    overflow: hidden;
+    border: 1px solid #30364b;
+    border-radius: 5px;
+    background: #0f1530;
+}
+#trade-list-panel.expanded {
+    position: fixed;
+    z-index: 60;
+    left: var(--trade-list-left, 12px);
+    top: var(--trade-list-top, 12px);
+    width: var(--trade-list-width, calc(100vw - 24px));
+    height: var(--trade-list-height, calc(100vh - 24px));
+    margin: 0;
+    box-shadow: 0 18px 56px rgba(0, 0, 0, 0.62);
+}
+.trade-list-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 8px;
+    border-bottom: 1px solid #30364b;
+    color: #d7dbea;
+    font-size: calc(11px * var(--font-scale));
+    font-weight: 700;
+    cursor: pointer;
+}
+#trade-list-panel.expanded .trade-list-title { color: #e0a800; }
+#trade-list-count {
+    color: #8e98b0;
+    font: calc(9px * var(--font-scale)) Consolas, monospace;
+    font-weight: 400;
+}
+#trade-list-filters {
+    display: flex;
+    gap: 5px;
+    padding: 6px 8px;
+    border-bottom: 1px solid #27304e;
+}
+.trade-list-filter {
+    padding: 2px 7px;
+    border: 1px solid #46516f;
+    border-radius: 4px;
+    background: #17203e;
+    color: #cfd5e4;
+    font: calc(10px * var(--font-scale)) Consolas, monospace;
+    cursor: pointer;
+}
+.trade-list-filter.active {
+    border-color: #e0a800;
+    color: #ffd166;
+}
+.trade-list-header {
+    display: grid;
+    grid-template-columns: 96px 250px 110px 90px;
+    gap: 0;
+    width: 578px;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border-bottom: 1px solid #27304e;
+    color: #e0a800;
+    font: calc(10px * var(--font-scale)) Consolas, monospace;
+    font-weight: 700;
+}
+#trade-list-viewport {
+    position: relative;
+    height: 160px;
+    overflow: auto;
+    background: #0b1028;
+    color: #cfd5e4;
+    font: calc(10px * var(--font-scale))/1.5 Consolas, monospace;
+}
+#trade-list-panel.expanded #trade-list-viewport {
+    height: calc(100% - 111px);
+}
+#trade-list-spacer {
+    position: relative;
+    width: 578px;
+    min-width: 578px;
+}
+#trade-list-rows {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+}
+.trade-list-row {
+    display: grid;
+    grid-template-columns: 96px 250px 110px 90px;
+    width: 578px;
+    min-width: 578px;
+    box-sizing: border-box;
+    height: 22px;
+    padding: 0 8px;
+    align-items: center;
+    border-bottom: 1px solid rgba(48, 54, 75, 0.35);
+    cursor: pointer;
+}
+.trade-list-row:hover {
+    background: rgba(224, 168, 0, 0.10);
+}
+.trade-list-row.active {
+    background: rgba(224, 168, 0, 0.18);
+    outline: 1px solid rgba(224, 168, 0, 0.62);
+    outline-offset: -1px;
+}
+.trade-list-row span {
+    overflow: hidden;
+    padding-right: 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px 15px;
+    margin: 8px 0 10px;
+    padding: 7px 0;
+    border-top: 1px solid #30364b;
+    border-bottom: 1px solid #30364b;
+    font-size: calc(11px * var(--font-scale));
+}
+.bid-text { color: #ff7777; }
+.ask-text { color: #6ee787; }
+.last-text { color: #e8e8e8; }
+.mid-text { color: #ffd166; }
+.book-card {
+    margin-bottom: 10px;
+    padding: 8px;
+    border: 1px solid #2d3655;
+    border-radius: 5px;
+    background: #0f1530;
+    cursor: pointer;
+}
+.book-card:hover { border-color: #7a86a6; background: #121a38; }
+.book-card.active { border-color: #e0a800; }
+.book-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+.book-name { color: #f0c94d; font-size: calc(12px * var(--font-scale)); font-weight: 700; }
+.book-time { color: #7f89a3; font: calc(9px * var(--font-scale)) Consolas, monospace; }
+.book-card canvas { position: static; display: block; width: 100%; height: 210px; }
+.book-note { margin-top: 4px; color: #6f7890; font-size: calc(9px * var(--font-scale)); }
+#stats { color: #75809b; font: calc(10px * var(--font-scale))/1.6 Consolas, monospace; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="chart-container">
+    <canvas id="main-canvas"></canvas>
+    <svg id="overlay-svg"></svg>
+    <div id="tooltip"></div>
+    <section id="snapshot-section" aria-hidden="true">
+      <div class="snapshot-section-header">
+        <div>
+          <span id="snapshot-section-title">Adjacent Snapshots</span>
+          <span id="snapshot-section-subtitle"></span>
+        </div>
+        <button id="snapshot-section-close" type="button">Close</button>
+      </div>
+      <div id="snapshot-grid" class="snapshot-grid"></div>
+    </section>
+    <div id="loading">
+      <button id="file-picker-close" type="button" aria-label="Close folder selection">×</button>
+      <h2>Loading Feather Files</h2>
+      <p id="loading-message">Loading data for the selected contracts...</p>
+      <div id="file-picker">
+        <p id="file-picker-message">Add each date folder you want to load.</p>
+        <div id="selected-folder-list">
+          <div class="selected-folder-empty">No folders selected</div>
+        </div>
+        <button id="folder-picker-button" class="file-button" type="button">Add Data Folder</button>
+        <button id="load-folders-button" class="file-button" type="button">Load Selected Folders</button>
+        <button id="clear-folders-button" class="file-button" type="button">Clear</button>
+        <label class="file-button" for="feather-files">Or Select Feather Files</label>
+        <input id="feather-files" class="hidden-file-input" type="file"
+               accept=".feather,application/octet-stream" multiple>
+        <input id="feather-folder" class="hidden-file-input" type="file"
+               accept=".feather,application/octet-stream" webkitdirectory directory multiple>
+      </div>
+    </div>
+  </div>
+  <div id="divider"></div>
+  <aside id="detail-panel">
+    <h3>Order Book Snapshot Details</h3>
+    <div class="font-controls" aria-label="Font size controls">
+      <label for="font-size-control">Font Size</label>
+      <input id="font-size-control" type="range" min="80" max="160" step="10" value="100">
+      <output id="font-size-value" for="font-size-control">100%</output>
+      <button id="font-size-reset" class="date-button" type="button">Reset</button>
+    </div>
+    <div id="date-selection-controls">
+      <div class="date-selection-header">
+        <span class="date-selection-title">Main Chart Dates</span>
+        <span id="selected-dates-summary">No dates available</span>
+      </div>
+      <div id="date-options" aria-label="Select dates to display on the main chart"></div>
+      <div class="date-selection-actions">
+        <button id="apply-dates-button" class="date-button" type="button">Apply Selection</button>
+        <button id="choose-folders-button" class="date-button" type="button">Choose Folders</button>
+        <button id="select-all-dates-button" class="date-button" type="button">Select All</button>
+        <button id="clear-dates-button" class="date-button" type="button">Clear</button>
+      </div>
+    </div>
+    <div id="date-controls">
+      <label for="data-date">Go to Date</label>
+      <input id="data-date" type="date" aria-label="Select a date for intraday navigation">
+      <button id="view-full-day-button" class="date-button" type="button">View Full Day</button>
+    </div>
+    <div id="intraday-controls">
+      <div class="time-wheel">
+        <input id="intraday-start-time" type="text" placeholder="HH:mm:ss" readonly
+               aria-label="Intraday start time, 24-hour format">
+      </div>
+      <span>to</span>
+      <div class="time-wheel">
+        <input id="intraday-end-time" type="text" placeholder="HH:mm:ss" readonly
+               aria-label="Intraday end time, 24-hour format">
+      </div>
+      <button id="locate-intraday-button" class="date-button" type="button">Go to Range</button>
+    </div>
+    <div id="intraday-error" role="alert"></div>
+    <div id="selected-time">Hover over the chart to view snapshots for the selected products</div>
+    <section id="trade-list-panel" aria-label="Trade log">
+      <div class="trade-list-title">
+        <span>Trade Log</span>
+        <span id="trade-list-count">0 rows</span>
+      </div>
+      <div id="trade-list-filters" aria-label="Filter trades by product"></div>
+      <div class="trade-list-header">
+        <span>contract</span>
+        <span>dt</span>
+        <span>instruction</span>
+        <span>price_trd</span>
+      </div>
+      <div id="trade-list-viewport" aria-label="All trade records">
+        <div id="trade-list-spacer">
+          <div id="trade-list-rows"></div>
+        </div>
+      </div>
+    </section>
+    <div id="legend">
+      <span class="bid-text">■ Bid</span>
+      <span class="ask-text">■ Ask</span>
+      <span class="last-text">● Last Price</span>
+      <span class="mid-text">┄ Midprice</span>
+    </div>
+    <div id="book-cards"></div>
+    <div id="stats"></div>
+  </aside>
+</div>
+
+<!-- Feather data is loaded from ./data through the local HTTP server. -->
+
+<script>
+(function () {
+"use strict";
+
+if (typeof d3 === "undefined") {
+    document.getElementById("loading-message").textContent = "Failed to load D3.js. Check your network connection.";
+    return;
+}
+
+let PRODUCTS = [];
+const PRODUCT_COLORS = [
+    "#e0a800", "#56b4e9", "#cc79a7", "#009e73", "#f0e442",
+    "#0072b2", "#d55e00", "#8a63d2", "#20a39e", "#ef476f"
+];
+const PRODUCT_DECIMALS = { AU: 2, CUS: 4, GC: 1 };
+let DATASETS = {};
+const DATA_CACHE = new Map();
+const BID_COLORS = ["#cc0000", "#e84040", "#f07171", "#f5a0a0", "#fad0d0"];
+const ASK_COLORS = ["#006600", "#1a8c1a", "#2eb82e", "#5cd65c", "#a3f0a3"];
+const BG = "#1a1a2e";
+const LEFT = 76;
+const RIGHT = 18;
+const TOP = 24;
+const AXIS_H = 48;
+const PANEL_GAP = 12;
+const MIN_SAMPLE_PX = 2;
+// Keep all snapshots visible until the chart is zoomed deeply enough for
+// adjacent millisecond-level updates to separate. Only then transition into
+// the single-snapshot detail view.
+let detailTransitionStartMs = 15;
+let detailTransitionEndMs = 1;
+const TRADE_LABEL_MIN_POINT_DISTANCE_PX = 86;
+const TRADE_LABEL_MAX_VISIBLE_SPAN_MS = 150000;
+const SNAPSHOT_HIT_PX = 5;
+const DETAIL_EDGE_INSET_PX = 10;
+const MAX_VISIBLE_IDLE_GAP_MS = 30 * 1000;
+const PANEL_ORDER_KEY = "orderbook-three-products-order";
+const FONT_SCALE_KEY = "orderbook-three-products-font-scale";
+const TITLE_DRAG_WIDTH = 300;
+const TITLE_DRAG_HEIGHT = 28;
+const INSTRUCTION_STYLES = [
+    { key: "open_long", label: "Open Long", rawAliases: ["\u5f00\u4ed3\uff0c\u591a", "\u5f00\u4ed3\uff0c\u65b9\u5411\u4e3a\u591a"], color: "#ff6b6b", radius: 1.7 },
+    { key: "open_short", label: "Open Short", rawAliases: ["\u5f00\u4ed3\uff0c\u7a7a", "\u5f00\u4ed3\uff0c\u65b9\u5411\u4e3a\u7a7a"], color: "#4dabf7", radius: 1.7 },
+    { key: "close_long", label: "Close Long", rawAliases: ["\u5e73\u4ed3\uff0c\u591a", "\u5e73\u4ed3\uff0c\u65b9\u5411\u4e3a\u591a"], color: "#ffd43b", radius: 1.7 },
+    { key: "close_short", label: "Close Short", rawAliases: ["\u5e73\u4ed3\uff0c\u7a7a", "\u5e73\u4ed3\uff0c\u65b9\u5411\u4e3a\u7a7a"], color: "#69db7c", radius: 1.7 },
+    { key: "cancel", label: "Cancel", rawAliases: ["\u64a4\u5355"], color: "#adb5bd", radius: 1.7 },
+    { key: "cancel_ok", label: "Cancel Confirmed", rawAliases: ["\u64a4\u5355\u6210\u529f"], color: "#845ef7", radius: 1.7 },
+    { key: "trade", label: "Filled", rawAliases: ["\u6210\u4ea4"], color: "#f783ac", radius: 1.7 },
+    { key: "partial_trade", label: "Partially Filled", rawAliases: ["\u90e8\u5206\u6210\u4ea4"], color: "#ffa94d", radius: 1.7 }
+];
+
+const container = document.getElementById("chart-container");
+const canvas = document.getElementById("main-canvas");
+const ctx = canvas.getContext("2d");
+const svg = document.getElementById("overlay-svg");
+const tooltip = document.getElementById("tooltip");
+const snapshotSection = document.getElementById("snapshot-section");
+const snapshotSectionTitle = document.getElementById("snapshot-section-title");
+const snapshotSectionSubtitle = document.getElementById("snapshot-section-subtitle");
+const snapshotSectionClose = document.getElementById("snapshot-section-close");
+const snapshotGrid = document.getElementById("snapshot-grid");
+const loading = document.getElementById("loading");
+const loadingMessage = document.getElementById("loading-message");
+const filePicker = document.getElementById("file-picker");
+const filePickerMessage = document.getElementById("file-picker-message");
+const filePickerClose = document.getElementById("file-picker-close");
+const folderPickerButton = document.getElementById("folder-picker-button");
+const loadFoldersButton = document.getElementById("load-folders-button");
+const clearFoldersButton = document.getElementById("clear-folders-button");
+const selectedFolderList = document.getElementById("selected-folder-list");
+const featherFiles = document.getElementById("feather-files");
+const featherFolder = document.getElementById("feather-folder");
+const detailPanel = document.getElementById("detail-panel");
+const fontSizeControl = document.getElementById("font-size-control");
+const fontSizeValue = document.getElementById("font-size-value");
+const fontSizeReset = document.getElementById("font-size-reset");
+const bookCards = document.getElementById("book-cards");
+const dateOptions = document.getElementById("date-options");
+const selectedDatesSummary = document.getElementById("selected-dates-summary");
+const applyDatesButton = document.getElementById("apply-dates-button");
+const chooseFoldersButton = document.getElementById("choose-folders-button");
+const selectAllDatesButton = document.getElementById("select-all-dates-button");
+const clearDatesButton = document.getElementById("clear-dates-button");
+const dataDate = document.getElementById("data-date");
+const viewFullDayButton = document.getElementById("view-full-day-button");
+const intradayStartTime = document.getElementById("intraday-start-time");
+const intradayEndTime = document.getElementById("intraday-end-time");
+const locateIntradayButton = document.getElementById("locate-intraday-button");
+const intradayControls = document.getElementById("intraday-controls");
+const intradayError = document.getElementById("intraday-error");
+const selectedTime = document.getElementById("selected-time");
+const tradeListPanel = document.getElementById("trade-list-panel");
+const tradeListTitle = tradeListPanel.querySelector(".trade-list-title");
+const tradeListCount = document.getElementById("trade-list-count");
+const tradeListFilters = document.getElementById("trade-list-filters");
+const tradeListViewport = document.getElementById("trade-list-viewport");
+const tradeListSpacer = document.getElementById("trade-list-spacer");
+const tradeListRows = document.getElementById("trade-list-rows");
+const stats = document.getElementById("stats");
+
+let allRaw = null;
+let availableDates = [];
+let activeDataDate = "";
+let activeDataDates = [];
+let activeProductKeys = [];
+let selectedFolderDescriptors = [];
+let selectedFolderNames = [];
+let pendingIntradayLocation = null;
+let series = [];
+let extent = [0, 1];
+let baseX = null;
+let transform = d3.zoomIdentity;
+let width = 0;
+let height = 0;
+let dpr = 1;
+let hoverTime = null;
+let pinnedTime = null;
+let pinnedProductKey = null;
+let pinnedRowIndex = null;
+let mouseY = -1;
+let raf = null;
+let maxZoom = 400;
+let viewX = null;
+let panelViews = [];
+let timeOriginMs = 0;
+let compressedAbsoluteTimes = new Float64Array(0);
+let compressedDisplayTimes = new Float64Array(0);
+let compressedTimeByTimestamp = new Map();
+let zoomAnchorTime = null;
+let panelDrag = null;
+let suppressCanvasClick = false;
+let focusedProductKey = null;
+let unionTimes = new Float64Array(0);
+let fontScale = 1;
+let tradeListEntries = [];
+let tradeListTotalRows = 0;
+let tradeListRenderFrame = null;
+let tradeListProductFilter = "all";
+let tradeListVirtualHeight = 0;
+let tradeListTimeFilter = null;
+let selectedTradeListKey = "";
+
+function canvasFont(size, family = "Consolas, monospace", weight = "") {
+    return (weight ? weight + " " : "") +
+        Math.round(size * fontScale * 10) / 10 + "px " + family;
+}
+
+function applyFontScale(percent, persist = true) {
+    const normalized = Math.max(80, Math.min(160, Number(percent) || 100));
+    fontScale = normalized / 100;
+    document.body.style.setProperty("--font-scale", String(fontScale));
+    fontSizeControl.value = String(normalized);
+    fontSizeValue.value = normalized + "%";
+    fontSizeValue.textContent = normalized + "%";
+    if (persist) {
+        try {
+            localStorage.setItem(FONT_SCALE_KEY, String(normalized));
+        } catch (_) {
+            // Font scaling still works for the current session.
+        }
+    }
+    document.querySelectorAll("canvas").forEach(canvasElement => {
+        if (canvasElement._bookItem && canvasElement._bookRow) {
+            renderBook(canvasElement, canvasElement._bookItem, canvasElement._bookRow);
+        }
+    });
+    scheduleRender();
+}
+
+try {
+    applyFontScale(localStorage.getItem(FONT_SCALE_KEY) || 100, false);
+} catch (_) {
+    applyFontScale(100, false);
+}
+
+fontSizeControl.addEventListener("input", () => applyFontScale(fontSizeControl.value));
+fontSizeReset.addEventListener("click", () => applyFontScale(100));
+tradeListViewport.addEventListener("scroll", renderTradeListWindow);
+tradeListTitle.addEventListener("click", () => toggleTradeListExpanded());
+tradeListFilters.addEventListener("click", event => {
+    const button = event.target.closest(".trade-list-filter");
+    if (!button) return;
+    tradeListProductFilter = button.dataset.key || "all";
+    updateTradeList();
+});
+tradeListRows.addEventListener("dblclick", event => {
+    const rowElement = event.target.closest(".trade-list-row");
+    if (!rowElement) return;
+    locateTradeListEntry(Number(rowElement.dataset.globalIndex));
+});
+tradeListRows.addEventListener("click", event => {
+    const rowElement = event.target.closest(".trade-list-row");
+    if (!rowElement) return;
+    selectedTradeListKey = rowElement.dataset.rowKey || "";
+    renderTradeListWindow();
+});
+
+function sizeExpandedTradeList() {
+    if (!tradeListPanel.classList.contains("expanded")) return;
+    const rect = detailPanel.getBoundingClientRect();
+    tradeListPanel.style.setProperty("--trade-list-left", rect.left + "px");
+    tradeListPanel.style.setProperty("--trade-list-top", rect.top + "px");
+    tradeListPanel.style.setProperty("--trade-list-width", rect.width + "px");
+    tradeListPanel.style.setProperty("--trade-list-height", rect.height + "px");
+    renderTradeListWindow();
+}
+
+function toggleTradeListExpanded(force = null) {
+    const shouldExpand = force === null
+        ? !tradeListPanel.classList.contains("expanded")
+        : Boolean(force);
+    tradeListPanel.classList.toggle("expanded", shouldExpand);
+    tradeListTitle.title = shouldExpand ? "Click to collapse the trade log" : "Click to expand the trade log";
+    sizeExpandedTradeList();
+    renderTradeListWindow();
+}
+
+function setupTimeWheel(input) {
+    const popup = document.createElement("div");
+    popup.className = "time-wheel-popup";
+    popup.innerHTML =
+        '<div class="time-wheel-labels"><span>Hours</span><span>Minutes</span><span>Seconds</span></div>' +
+        '<div class="time-wheel-columns"></div>' +
+        '<button class="date-button time-wheel-done" type="button">Done</button>';
+    input.parentElement.appendChild(popup);
+
+    const columns = popup.querySelector(".time-wheel-columns");
+    const limits = [24, 60, 60];
+    const selects = limits.map(limit => {
+        const select = document.createElement("select");
+        select.size = 7;
+        for (let value = 0; value < limit; value++) {
+            const option = document.createElement("option");
+            option.value = String(value).padStart(2, "0");
+            option.textContent = option.value;
+            select.appendChild(option);
+        }
+        columns.appendChild(select);
+        return select;
+    });
+
+    const syncValue = () => {
+        input.value = selects.map(select => select.value).join(":");
+        validateIntradayRange();
+    };
+    const selectCurrentValue = () => {
+        const parts = /^(\d{2}):(\d{2}):(\d{2})$/.exec(input.value) || ["", "00", "00", "00"];
+        selects.forEach((select, index) => {
+            select.value = parts[index + 1];
+            select.options[select.selectedIndex].scrollIntoView({ block: "center" });
+        });
+        syncValue();
+    };
+
+    selects.forEach(select => {
+        select.addEventListener("change", syncValue);
+        select.addEventListener("wheel", event => {
+            event.preventDefault();
+            const direction = event.deltaY > 0 ? 1 : -1;
+            select.selectedIndex = Math.max(
+                0,
+                Math.min(select.options.length - 1, select.selectedIndex + direction)
+            );
+            syncValue();
+            select.options[select.selectedIndex].scrollIntoView({ block: "center" });
+        }, { passive: false });
+    });
+
+    input.addEventListener("click", event => {
+        event.stopPropagation();
+        document.querySelectorAll(".time-wheel-popup.open").forEach(openPopup => {
+            if (openPopup !== popup) openPopup.classList.remove("open");
+        });
+        const willOpen = !popup.classList.contains("open");
+        popup.classList.toggle("open", willOpen);
+        if (willOpen) selectCurrentValue();
+    });
+    popup.addEventListener("click", event => event.stopPropagation());
+    popup.querySelector(".time-wheel-done").addEventListener("click", () => {
+        syncValue();
+        popup.classList.remove("open");
+    });
+}
+
+setupTimeWheel(intradayStartTime);
+setupTimeWheel(intradayEndTime);
+document.addEventListener("click", () => {
+    document.querySelectorAll(".time-wheel-popup.open").forEach(popup => {
+        popup.classList.remove("open");
+    });
+});
+
+function timeValueSeconds(value) {
+    const parts = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/.exec(value);
+    return parts ? Number(parts[1]) * 3600 + Number(parts[2]) * 60 + Number(parts[3]) : NaN;
+}
+
+function validateIntradayRange() {
+    const startSeconds = timeValueSeconds(intradayStartTime.value);
+    const endSeconds = timeValueSeconds(intradayEndTime.value);
+    let message = "";
+    if (Number.isFinite(startSeconds) && Number.isFinite(endSeconds) &&
+        endSeconds <= startSeconds &&
+        !(startSeconds >= 18 * 3600 && endSeconds < 18 * 3600)) {
+        message = "The end time must be later than the start time";
+    }
+    intradayControls.classList.toggle("invalid", Boolean(message));
+    intradayError.textContent = message;
+    intradayError.classList.toggle("visible", Boolean(message));
+    locateIntradayButton.disabled = !availableDates.length || Boolean(message);
+    return !message;
+}
+
+function parseTimestampParts(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/.exec(value);
+    if (!m) return null;
+    return {
+        wholeMs: new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], 0).getTime(),
+        nanoseconds: Number((m[7] || "").slice(0, 9).padEnd(9, "0"))
+    };
+}
+
+function datePart(value) {
+    const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(value));
+    return match ? match[1] : "";
+}
+
+function tradingDatePart(row) {
+    return row._tradingDate || datePart(row.dt);
+}
+
+function productNameFromFilename(filename) {
+    const stem = String(filename || "").replace(/\.feather$/i, "").trim();
+    return (stem.split("-", 1)[0] || stem || "UNKNOWN").trim();
+}
+
+function productKeyFromFilename(filename) {
+    const name = productNameFromFilename(filename);
+    const prefix = /^[A-Za-z]+/.exec(name);
+    if (prefix) return prefix[0].toUpperCase();
+    return name.replace(/[^0-9A-Za-z_]+/g, "_").replace(/^_+|_+$/g, "") || name;
+}
+
+function productStyleForIndex(index) {
+    return PRODUCT_COLORS[index % PRODUCT_COLORS.length];
+}
+
+function ensureProduct(config = {}) {
+    const key = String(config.key || productKeyFromFilename(config.file || config.mdFile || "")).trim();
+    if (!key) throw new Error("Could not identify the product from the file name");
+    let product = PRODUCTS.find(entry => entry.key === key);
+    if (!product) {
+        product = {
+            key,
+            name: config.name || key,
+            file: config.file || config.mdFile || "",
+            color: productStyleForIndex(PRODUCTS.length),
+            hasDepth: false,
+            decimals: PRODUCT_DECIMALS[key] ?? 2
+        };
+        PRODUCTS.push(product);
+    }
+    Object.assign(product, {
+        key,
+        name: config.name || product.name || key,
+        file: config.file || config.mdFile || product.file || "",
+        color: config.color || product.color,
+        hasDepth: Boolean(config.hasDepth ?? product.hasDepth),
+        decimals: Number.isFinite(Number(config.decimals))
+            ? Number(config.decimals)
+            : product.decimals
+    });
+    return product;
+}
+
+function refreshProductsFromDatasets() {
+    PRODUCTS = [];
+    const dates = Object.keys(DATASETS).sort();
+    for (const date of dates) {
+        const dataset = DATASETS[date] || {};
+        for (const [key, entry] of Object.entries(dataset)) {
+            ensureProduct({ ...entry, key: entry.key || key });
+        }
+    }
+}
+
+function dateFromPath(path) {
+    const segments = pathSegments(path);
+    const joined = "/" + segments.join("/") + "/";
+    const direct = /\/(\d{4})-(\d{2})-(\d{2})\//.exec(joined) ||
+        /\/(\d{4})_(\d{2})_(\d{2})\//.exec(joined);
+    if (direct) return direct[1] + "-" + direct[2] + "-" + direct[3];
+    for (let i = 0; i <= segments.length - 3; i++) {
+        if (/^\d{4}$/.test(segments[i]) &&
+            /^\d{1,2}$/.test(segments[i + 1]) &&
+            /^\d{1,2}$/.test(segments[i + 2])) {
+            return segments[i] + "-" +
+                segments[i + 1].padStart(2, "0") + "-" +
+                segments[i + 2].padStart(2, "0");
+        }
+    }
+    return "";
+}
+
+function mergeDatasetsFromDescriptors(descriptors) {
+    const mdDescriptors = descriptors.filter(descriptor => descriptorHasSegment(descriptor, "md"));
+    const tradeDescriptors = descriptors.filter(descriptor => descriptorHasSegment(descriptor, "trade"));
+    let added = 0;
+    for (const mdDescriptor of mdDescriptors) {
+        const date = dateFromPath(mdDescriptor.path);
+        if (!date) continue;
+        const tradeDescriptor = tradeDescriptors.find(candidate =>
+            candidate.file.name.toLowerCase() === mdDescriptor.file.name.toLowerCase() &&
+            dateFromPath(candidate.path) === date
+        );
+        if (!tradeDescriptor) continue;
+        const name = productNameFromFilename(mdDescriptor.file.name);
+        let key = productKeyFromFilename(mdDescriptor.file.name);
+        const dataset = (DATASETS[date] ||= {});
+        if (dataset[key] &&
+            String(dataset[key].mdFile || dataset[key].file).toLowerCase() !==
+                mdDescriptor.file.name.toLowerCase()) {
+            key = name;
+        }
+        while (dataset[key] &&
+            String(dataset[key].mdFile || dataset[key].file).toLowerCase() !==
+                mdDescriptor.file.name.toLowerCase()) {
+            key = name + "_" + (Object.keys(dataset).length + 1);
+        }
+        dataset[key] = {
+            key,
+            name,
+            file: mdDescriptor.file.name,
+            mdFile: mdDescriptor.file.name,
+            tradeFile: tradeDescriptor.file.name
+        };
+        added++;
+    }
+    if (added) refreshProductsFromDatasets();
+    return added;
+}
+
+function productsInRaw(raw) {
+    if (raw) {
+        Object.keys(raw).filter(key =>
+            key !== "_trades" && Array.isArray(raw[key]) && raw[key].length
+        ).forEach(key => ensureProduct({ key }));
+    }
+    return PRODUCTS.filter(product =>
+        raw && Array.isArray(raw[product.key]) && raw[product.key].length
+    );
+}
+
+function findCommonDates(raw) {
+    let common = null;
+    for (const product of productsInRaw(raw)) {
+        const dates = new Set();
+        for (const row of raw[product.key] || []) {
+            const date = tradingDatePart(row);
+            if (date) dates.add(date);
+        }
+        common = common === null ? dates : new Set(Array.from(common).filter(date => dates.has(date)));
+    }
+    return Array.from(common || []).sort();
+}
+
+function normalizeSelectedDates(selectedDates) {
+    const dates = Array.isArray(selectedDates)
+        ? selectedDates
+        : (selectedDates ? [selectedDates] : []);
+    return Array.from(new Set(dates)).filter(date => availableDates.includes(date)).sort();
+}
+
+function filterRawByDates(raw, selectedDates) {
+    const dates = normalizeSelectedDates(selectedDates);
+    if (!dates.length) return raw;
+    const selected = new Set(dates);
+    const filtered = { _trades: {} };
+    for (const product of productsInRaw(raw)) {
+        filtered[product.key] = raw[product.key].filter(row =>
+            selected.has(tradingDatePart(row))
+        );
+        filtered._trades[product.key] = ((raw._trades && raw._trades[product.key]) || []).filter(row =>
+            selected.has(tradingDatePart(row))
+        );
+        if (!filtered[product.key].length) {
+            throw new Error(product.file + " has no data for the selected dates");
+        }
+    }
+    return filtered;
+}
+
+function checkedDates() {
+    return Array.from(dateOptions.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(input => input.value)
+        .sort();
+}
+
+function updateSelectedDatesSummary(dates = checkedDates()) {
+    if (!availableDates.length) {
+        selectedDatesSummary.textContent = "No dates available";
+    } else if (!dates.length) {
+        selectedDatesSummary.textContent = "Select at least one date";
+    } else if (dates.length === availableDates.length) {
+        selectedDatesSummary.textContent = "All " + dates.length + " dates";
+    } else {
+        selectedDatesSummary.textContent = dates.length + " dates";
+        selectedDatesSummary.title = dates.join(", ");
+    }
+    applyDatesButton.disabled = !dates.length;
+}
+
+function renderDateOptions() {
+    const selected = new Set(activeDataDates.length
+        ? activeDataDates
+        : (availableDates.length ? [availableDates[availableDates.length - 1]] : []));
+    dateOptions.innerHTML = "";
+    for (const date of availableDates) {
+        const label = document.createElement("label");
+        label.className = "date-option";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = date;
+        input.checked = selected.has(date);
+        input.addEventListener("change", () => updateSelectedDatesSummary());
+        const text = document.createElement("span");
+        text.textContent = date;
+        label.append(input, text);
+        dateOptions.appendChild(label);
+    }
+    updateSelectedDatesSummary();
+}
+
+function updateDateControls() {
+    dataDate.disabled = !availableDates.length;
+    viewFullDayButton.disabled = !availableDates.length;
+    selectAllDatesButton.disabled = !availableDates.length;
+    clearDatesButton.disabled = !availableDates.length;
+    intradayStartTime.disabled = !availableDates.length;
+    intradayEndTime.disabled = !availableDates.length;
+    validateIntradayRange();
+    if (availableDates.length) {
+        dataDate.min = availableDates[0];
+        dataDate.max = availableDates[availableDates.length - 1];
+        dataDate.title = "Available dates: " + availableDates.join(", ");
+    }
+    renderDateOptions();
+}
+
+function formatAxisTime(ms, includeDate, includeMs = false) {
+    const absoluteMs = expandTimelineTime(ms);
+    const d = new Date(absoluteMs);
+    const pad = (n, w = 2) => String(n).padStart(w, "0");
+    let time = pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    if (includeMs) {
+        const fractionalMs = Math.max(0, absoluteMs - Math.floor(absoluteMs / 1000) * 1000);
+        time += "." + String(Math.floor(fractionalMs)).padStart(3, "0");
+    }
+    return includeDate ? pad(d.getMonth() + 1) + "/" + pad(d.getDate()) + " " + time : time;
+}
+
+function formatRelativeTimeNs(relativeMs) {
+    const absoluteNs = BigInt(Math.round(expandTimelineTime(relativeMs) * 1e6));
+    const wholeMs = absoluteNs / 1000000n;
+    const nanos = absoluteNs % 1000000000n;
+    const d = new Date(Number(wholeMs));
+    const pad = (n, w = 2) => String(n).padStart(w, "0");
+    return pad(d.getFullYear(), 4) + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " +
+        pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + "." +
+        nanos.toString().padStart(9, "0");
+}
+
+function buildCompressedTimeline(raw, activeProducts) {
+    const timestampEntries = [];
+    for (const product of activeProducts) {
+        for (const row of raw[product.key]) {
+            const parts = parseTimestampParts(row.dt);
+            if (!parts) throw new Error(product.key + " has an invalid timestamp: " + row.dt);
+            timestampEntries.push({
+                timestamp: row.dt,
+                epochNs: BigInt(parts.wholeMs) * 1000000n + BigInt(parts.nanoseconds)
+            });
+        }
+    }
+    timestampEntries.sort((a, b) => a.epochNs < b.epochNs ? -1 : a.epochNs > b.epochNs ? 1 : 0);
+    const uniqueEntries = timestampEntries.filter(
+        (entry, index) => index === 0 || entry.epochNs !== timestampEntries[index - 1].epochNs
+    );
+    const absoluteTimes = new Float64Array(uniqueEntries.length);
+    const displayTimes = new Float64Array(uniqueEntries.length);
+    const displayByEpochNs = new Map();
+    let displayTime = 0;
+    for (let index = 0; index < uniqueEntries.length; index++) {
+        if (index > 0) {
+            displayTime += Math.min(
+                Number(uniqueEntries[index].epochNs - uniqueEntries[index - 1].epochNs) / 1e6,
+                MAX_VISIBLE_IDLE_GAP_MS
+            );
+        }
+        absoluteTimes[index] = Number(uniqueEntries[index].epochNs) / 1e6;
+        displayTimes[index] = displayTime;
+        displayByEpochNs.set(uniqueEntries[index].epochNs.toString(), displayTime);
+    }
+    compressedTimeByTimestamp = new Map(timestampEntries.map(entry => [
+        entry.timestamp,
+        displayByEpochNs.get(entry.epochNs.toString())
+    ]));
+    compressedAbsoluteTimes = absoluteTimes;
+    compressedDisplayTimes = displayTimes;
+    timeOriginMs = absoluteTimes[0] || 0;
+}
+
+function compressTimelineTime(absoluteTime) {
+    if (!compressedAbsoluteTimes.length) return absoluteTime - timeOriginMs;
+    let lo = 0;
+    let hi = compressedAbsoluteTimes.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (compressedAbsoluteTimes[mid] < absoluteTime) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo < compressedAbsoluteTimes.length &&
+        compressedAbsoluteTimes[lo] === absoluteTime) {
+        return compressedDisplayTimes[lo];
+    }
+    const previousIndex = Math.max(0, lo - 1);
+    const nextIndex = Math.min(compressedAbsoluteTimes.length - 1, lo);
+    if (previousIndex === nextIndex) return compressedDisplayTimes[previousIndex];
+    const absoluteSpan =
+        compressedAbsoluteTimes[nextIndex] - compressedAbsoluteTimes[previousIndex];
+    const displaySpan =
+        compressedDisplayTimes[nextIndex] - compressedDisplayTimes[previousIndex];
+    const ratio = absoluteSpan > 0
+        ? (absoluteTime - compressedAbsoluteTimes[previousIndex]) / absoluteSpan
+        : 0;
+    return compressedDisplayTimes[previousIndex] +
+        Math.max(0, Math.min(1, ratio)) * displaySpan;
+}
+
+function expandTimelineTime(displayTime) {
+    if (!compressedDisplayTimes.length) return timeOriginMs + displayTime;
+    let lo = 0;
+    let hi = compressedDisplayTimes.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (compressedDisplayTimes[mid] < displayTime) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo < compressedDisplayTimes.length &&
+        compressedDisplayTimes[lo] === displayTime) {
+        return compressedAbsoluteTimes[lo];
+    }
+    const previousIndex = Math.max(0, lo - 1);
+    const nextIndex = Math.min(compressedDisplayTimes.length - 1, lo);
+    if (previousIndex === nextIndex) return compressedAbsoluteTimes[previousIndex];
+    const displaySpan =
+        compressedDisplayTimes[nextIndex] - compressedDisplayTimes[previousIndex];
+    const ratio = displaySpan > 0
+        ? (displayTime - compressedDisplayTimes[previousIndex]) / displaySpan
+        : 0;
+    return compressedAbsoluteTimes[previousIndex] +
+        Math.max(0, Math.min(1, ratio)) *
+        (compressedAbsoluteTimes[nextIndex] - compressedAbsoluteTimes[previousIndex]);
+}
+
+function buildSeries(raw) {
+    const activeProducts = productsInRaw(raw);
+    if (!activeProducts.length) throw new Error("No product data is available to display");
+    buildCompressedTimeline(raw, activeProducts);
+
+    return activeProducts.map((product) => {
+        const rows = raw[product.key];
+        const trades = ((raw._trades && raw._trades[product.key]) || []).slice();
+        const names = Array.from(new Set(rows.map(row => row._name).filter(Boolean)));
+        const times = new Float64Array(rows.length);
+        for (let i = 0; i < rows.length; i++) {
+            const parts = parseTimestampParts(rows[i].dt);
+            if (!parts) throw new Error(product.key + " has an invalid timestamp: " + rows[i].dt);
+            times[i] = compressedTimeByTimestamp.get(rows[i].dt) ?? compressTimelineTime(
+                parts.wholeMs + parts.nanoseconds / 1e6
+            );
+        }
+        trades.sort((a, b) => a.dt.localeCompare(b.dt));
+        for (const trade of trades) {
+            trade._displayTime = Number.isFinite(trade._absoluteMs)
+                ? compressTimelineTime(trade._absoluteMs)
+                : NaN;
+        }
+        const item = { ...product, name: names.join(" / ") || product.name, rows, times, trades };
+        for (const trade of trades) {
+            trade._rowIndex = Number.isFinite(trade._displayTime)
+                ? previousIndex(item, trade._displayTime)
+                : -1;
+        }
+        return item;
+    });
+}
+
+function rowContractName(item, row) {
+    return row && row._name ? row._name : item.name;
+}
+
+function updateTradeList() {
+    if (!series.length) {
+        tradeListEntries = [];
+        tradeListTotalRows = 0;
+        tradeListSpacer.style.height = "0px";
+        tradeListRows.innerHTML = "";
+        tradeListFilters.innerHTML = "";
+        tradeListCount.textContent = "0 rows";
+        return;
+    }
+
+    if (tradeListProductFilter !== "all" &&
+        !series.some(item => item.key === tradeListProductFilter)) {
+        tradeListProductFilter = "all";
+    }
+    renderTradeListFilters();
+    tradeListEntries = [];
+    series.forEach((item, itemIndex) => {
+        if (tradeListProductFilter !== "all" && item.key !== tradeListProductFilter) return;
+        for (let tradeIndex = 0; tradeIndex < item.trades.length; tradeIndex++) {
+            const row = item.trades[tradeIndex];
+            if (tradeListTimeFilter &&
+                (!Number.isFinite(row._absoluteMs) ||
+                    row._absoluteMs < tradeListTimeFilter.startMs ||
+                    row._absoluteMs > tradeListTimeFilter.endMs)) {
+                continue;
+            }
+            tradeListEntries.push({ itemIndex, tradeIndex });
+        }
+    });
+    tradeListEntries.sort((a, b) => {
+        const itemA = series[a.itemIndex];
+        const itemB = series[b.itemIndex];
+        const rowA = itemA.trades[a.tradeIndex];
+        const rowB = itemB.trades[b.tradeIndex];
+        return rowA.dt.localeCompare(rowB.dt) ||
+            rowContractName(itemA, rowA).localeCompare(rowContractName(itemB, rowB));
+    });
+    tradeListTotalRows = tradeListEntries.length;
+    if (!tradeListTotalRows) {
+        tradeListRows.innerHTML = "";
+    }
+    tradeListVirtualHeight = Math.min(1200000, Math.max(1, tradeListTotalRows * 22));
+    tradeListSpacer.style.height = tradeListVirtualHeight + "px";
+    tradeListViewport.scrollTop = 0;
+    tradeListCount.textContent = (tradeListTimeFilter ? tradeListTimeFilter.label + "  " : "") +
+        tradeListTotalRows.toLocaleString() + " rows";
+    renderTradeListWindow();
+}
+
+function tradeListPosition(globalIndex) {
+    const entry = tradeListEntries[globalIndex];
+    if (!entry) return null;
+    return {
+        item: series[entry.itemIndex],
+        tradeIndex: entry.tradeIndex
+    };
+}
+
+function renderTradeListFilters() {
+    const options = [
+        { key: "all", label: "All" },
+        ...series.map(item => ({ key: item.key, label: item.name || item.key }))
+    ];
+    tradeListFilters.innerHTML = "";
+    for (const option of options) {
+        const button = document.createElement("button");
+        button.className = "trade-list-filter" +
+            (option.key === tradeListProductFilter ? " active" : "");
+        button.type = "button";
+        button.textContent = option.label;
+        button.dataset.key = option.key;
+        tradeListFilters.appendChild(button);
+    }
+}
+
+function renderTradeListWindow() {
+    if (tradeListRenderFrame !== null) return;
+    tradeListRenderFrame = requestAnimationFrame(() => {
+        tradeListRenderFrame = null;
+        if (!tradeListTotalRows) {
+            tradeListRows.innerHTML = "";
+            return;
+        }
+
+        const rowHeight = 22;
+        const visibleCount = Math.ceil(tradeListViewport.clientHeight / rowHeight) + 8;
+        const maxStart = Math.max(0, tradeListTotalRows - visibleCount);
+        const scrollableHeight = Math.max(
+            1,
+            tradeListVirtualHeight - tradeListViewport.clientHeight
+        );
+        const scrollRatio = Math.max(
+            0,
+            Math.min(1, tradeListViewport.scrollTop / scrollableHeight)
+        );
+        const atBottom = tradeListViewport.scrollTop >= scrollableHeight - 2;
+        const start = atBottom
+            ? maxStart
+            : Math.min(maxStart, Math.floor(scrollRatio * maxStart));
+        const end = Math.min(tradeListTotalRows, start + visibleCount);
+        const fragment = document.createDocumentFragment();
+        for (let index = start; index < end; index++) {
+            const position = tradeListPosition(index);
+            if (!position) continue;
+            const item = position.item;
+            const row = item.trades[position.tradeIndex];
+            const priceTrd = Number.isFinite(Number(row.price_trd))
+                ? String(Number(row.price_trd))
+                : String(row.price_trd ?? "");
+            const style = instructionStyle(row, position.tradeIndex);
+            const line = document.createElement("div");
+            const rowKey = tradeListEntryKey(item, position.tradeIndex);
+            line.className = "trade-list-row" + (rowKey === selectedTradeListKey ? " active" : "");
+            line.dataset.globalIndex = String(index);
+            line.dataset.rowKey = rowKey;
+            line.title = "Double-click to locate this trade on the main chart";
+            line.innerHTML =
+                '<span style="color:' + escapeHtml(item.color) + '">' +
+                escapeHtml(rowContractName(item, row)) + "</span>" +
+                "<span>" + escapeHtml(row.dt) + "</span>" +
+                '<span style="color:' + escapeHtml(style.color) + '">' +
+                escapeHtml(style.label) + "</span>" +
+                "<span>" + escapeHtml(priceTrd) + "</span>";
+            fragment.appendChild(line);
+        }
+        const renderedHeight = (end - start) * rowHeight;
+        const renderTop = atBottom
+            ? Math.max(0, tradeListVirtualHeight - renderedHeight)
+            : Math.min(
+                tradeListViewport.scrollTop,
+                Math.max(0, tradeListVirtualHeight - renderedHeight)
+            );
+        tradeListRows.style.transform = "translateY(" + renderTop + "px)";
+        tradeListRows.replaceChildren(fragment);
+    });
+}
+
+function tradeListEntryKey(item, tradeIndex) {
+    return item.key + ":" + tradeIndex;
+}
+
+function locateTradeListEntry(globalIndex) {
+    if (!Number.isInteger(globalIndex) || !baseX || !series.length) return;
+    const position = tradeListPosition(globalIndex);
+    if (!position) return;
+    const item = position.item;
+    const trade = item.trades[position.tradeIndex];
+    if (!trade || !Number.isFinite(trade._displayTime) || !Number.isInteger(trade._rowIndex)) return;
+
+    const rowIndex = Math.max(0, Math.min(item.rows.length - 1, trade._rowIndex));
+    selectedTradeListKey = tradeListEntryKey(item, position.tradeIndex);
+    pinnedTime = trade._displayTime;
+    pinnedProductKey = item.key;
+    pinnedRowIndex = rowIndex;
+    hoverTime = pinnedTime;
+    zoomAnchorTime = null;
+    tooltip.style.display = "none";
+
+    const fullSpan = Math.max(1, extent[1] - extent[0]);
+    const targetSpan = Math.max(detailTransitionEndMs * 10, fullSpan / 180);
+    const scale = Math.max(1, Math.min(maxZoom, fullSpan / targetSpan));
+    const centerX = LEFT + (width - LEFT - RIGHT) / 2;
+    const translateX = centerX - scale * baseX(pinnedTime);
+    transform = d3.zoomIdentity.translate(translateX, 0).scale(scale);
+    d3.select(canvas).call(zoom.transform, transform);
+
+    updateDetails(pinnedTime);
+    selectedTime.textContent = "Located trade: " + rowContractName(item, trade) + "  " + trade.dt;
+    renderTradeListWindow();
+    scheduleRender();
+}
+
+function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+    })[char]);
+}
+
+function sameContinuousSeries(previousRow, row) {
+    if (!previousRow || !row) return false;
+    return tradingDatePart(previousRow) === tradingDatePart(row) &&
+        (previousRow._name || "") === (row._name || "");
+}
+
+function lowerBound(times, target) {
+    let lo = 0;
+    let hi = times.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (times[mid] < target) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+function upperBound(times, target) {
+    let lo = 0;
+    let hi = times.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (times[mid] <= target) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+function buildUnionTimes(items) {
+    const positions = new Uint32Array(items.length);
+    const result = [];
+    let last = NaN;
+    while (true) {
+        let next = Infinity;
+        for (let i = 0; i < items.length; i++) {
+            if (positions[i] < items[i].times.length) {
+                next = Math.min(next, items[i].times[positions[i]]);
+            }
+        }
+        if (!Number.isFinite(next)) break;
+        if (next !== last) {
+            result.push(next);
+            last = next;
+        }
+        for (let i = 0; i < items.length; i++) {
+            const times = items[i].times;
+            while (positions[i] < times.length && times[positions[i]] === next) positions[i]++;
+        }
+    }
+    return Float64Array.from(result);
+}
+
+function configureDetailZoom() {
+    let minimumGapMs = Infinity;
+    for (let index = 1; index < unionTimes.length; index++) {
+        const gap = unionTimes[index] - unionTimes[index - 1];
+        if (gap > 0 && gap < minimumGapMs) minimumGapMs = gap;
+    }
+    if (!Number.isFinite(minimumGapMs)) minimumGapMs = 1;
+    const plotWidth = Math.max(1, container.clientWidth - LEFT - RIGHT);
+    detailTransitionEndMs = Math.max(minimumGapMs, minimumGapMs * plotWidth / 220);
+    detailTransitionStartMs = detailTransitionEndMs * 8;
+    maxZoom = Math.max(400, (extent[1] - extent[0]) / detailTransitionEndMs);
+    zoom.scaleExtent([1, maxZoom]);
+}
+
+function originalDtAt(time) {
+    for (const item of series) {
+        const index = lowerBound(item.times, time);
+        if (index < item.times.length && item.times[index] === time) return item.rows[index].dt;
+    }
+    return formatRelativeTimeNs(time);
+}
+
+function nearestIndex(item, target) {
+    let i = lowerBound(item.times, target);
+    if (i >= item.times.length) return item.times.length - 1;
+    if (i > 0 && target - item.times[i - 1] <= item.times[i] - target) i--;
+    return i;
+}
+
+function previousIndex(item, target) {
+    return Math.max(0, upperBound(item.times, target) - 1);
+}
+
+function previousIndexOrNull(item, target) {
+    const index = upperBound(item.times, target) - 1;
+    return index >= 0 ? index : null;
+}
+
+function whiteCircleHit(targetTime) {
+    if (pinnedTime !== null && pinnedProductKey !== null && pinnedRowIndex !== null) {
+        const item = series.find(candidate => candidate.key === pinnedProductKey);
+        if (item && pinnedRowIndex >= 0 && pinnedRowIndex < item.rows.length) {
+            return { item, index: pinnedRowIndex, row: item.rows[pinnedRowIndex] };
+        }
+    }
+    for (const item of series) {
+        const index = lowerBound(item.times, targetTime);
+        if (index < item.times.length && item.times[index] === targetTime) {
+            return { item, index, row: item.rows[index] };
+        }
+    }
+    let best = null;
+    for (const item of series) {
+        const index = nearestIndex(item, targetTime);
+        const distance = Math.abs(item.times[index] - targetTime);
+        if (best === null || distance < best.distance) {
+            best = { item, index, row: item.rows[index], distance };
+        }
+    }
+    return best;
+}
+
+function nearestUnionTime(target) {
+    let index = lowerBound(unionTimes, target);
+    if (index >= unionTimes.length) return unionTimes[unionTimes.length - 1];
+    if (index > 0 && target - unionTimes[index - 1] <= unionTimes[index] - target) index--;
+    return unionTimes[index];
+}
+
+function intradayAbsoluteMs(selectedDate, timeValue) {
+    const parts = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/.exec(timeValue);
+    if (!parts) return NaN;
+    const value = new Date(
+        Number(selectedDate.slice(0, 4)),
+        Number(selectedDate.slice(5, 7)) - 1,
+        Number(selectedDate.slice(8, 10)),
+        Number(parts[1]),
+        Number(parts[2]),
+        Number(parts[3]),
+        0
+    );
+    // The evening session belongs to the following trading date.
+    if (Number(parts[1]) >= 18) value.setDate(value.getDate() - 1);
+    return value.getTime();
+}
+
+function locateIntradayPosition(selectedDate, startTimeValue, endTimeValue) {
+    if (!series.length || !baseX || !unionTimes.length) return;
+    const startAbsoluteMs = intradayAbsoluteMs(selectedDate, startTimeValue);
+    const endAbsoluteMs = intradayAbsoluteMs(selectedDate, endTimeValue);
+    if (!Number.isFinite(startAbsoluteMs) || !Number.isFinite(endAbsoluteMs)) {
+        selectedTime.textContent = "Enter the time as HH:mm:ss in 24-hour format";
+        return;
+    }
+    if (endAbsoluteMs <= startAbsoluteMs) {
+        selectedTime.textContent = "The end time must be later than the start time";
+        return;
+    }
+
+    const requestedStart = compressTimelineTime(startAbsoluteMs);
+    const requestedEnd = compressTimelineTime(endAbsoluteMs);
+    const rangeStart = Math.max(extent[0], requestedStart);
+    const rangeEnd = Math.min(extent[1], requestedEnd);
+    if (rangeEnd <= rangeStart) {
+        selectedTime.textContent = "No market data is available for the selected time range";
+        return;
+    }
+
+    pinnedTime = null;
+    pinnedProductKey = null;
+    pinnedRowIndex = null;
+    hoverTime = nearestUnionTime((rangeStart + rangeEnd) / 2);
+    zoomAnchorTime = null;
+
+    const fullSpanMs = Math.max(1, extent[1] - extent[0]);
+    const rangeSpanMs = Math.max(detailTransitionEndMs, rangeEnd - rangeStart);
+    const scale = Math.max(1, Math.min(maxZoom, fullSpanMs / rangeSpanMs));
+    const translateX = LEFT - scale * baseX(rangeStart);
+    transform = d3.zoomIdentity.translate(translateX, 0).scale(scale);
+    d3.select(canvas).call(zoom.transform, transform);
+    updateDetails(hoverTime);
+    selectedTime.textContent = "Intraday range: " + selectedDate + " " +
+        startTimeValue + " - " + endTimeValue;
+    tradeListTimeFilter = {
+        startMs: startAbsoluteMs,
+        endMs: endAbsoluteMs,
+        label: selectedDate + " " + startTimeValue + "-" + endTimeValue
+    };
+    updateTradeList();
+    scheduleRender();
+}
+
+async function requestIntradayLocation() {
+    const selectedDate = dataDate.value || activeDataDate;
+    const startTimeValue = intradayStartTime.value;
+    const endTimeValue = intradayEndTime.value;
+    if (!validateIntradayRange()) return;
+    if (!selectedDate) {
+        selectedTime.textContent = "Select a date before navigating to an intraday range";
+        dataDate.focus();
+        return;
+    }
+    if (!startTimeValue) {
+        selectedTime.textContent = "Enter an intraday start time";
+        intradayStartTime.focus();
+        return;
+    }
+    if (!endTimeValue) {
+        selectedTime.textContent = "Enter an intraday end time";
+        intradayEndTime.focus();
+        return;
+    }
+    if (!availableDates.includes(selectedDate)) {
+        selectedTime.textContent = "No data is available for the selected products on " + selectedDate;
+        return;
+    }
+    if (!activeDataDates.includes(selectedDate)) {
+        pendingIntradayLocation = {
+            date: selectedDate,
+            startTime: startTimeValue,
+            endTime: endTimeValue
+        };
+        await loadConfiguredDate(selectedDate);
+        return;
+    }
+    locateIntradayPosition(selectedDate, startTimeValue, endTimeValue);
+}
+
+async function viewSelectedFullDay() {
+    const selectedDate = dataDate.value;
+    if (!selectedDate || !availableDates.includes(selectedDate)) {
+        selectedTime.textContent = "Select an available date";
+        dataDate.focus();
+        return;
+    }
+    pendingIntradayLocation = null;
+    tradeListTimeFilter = null;
+    await loadConfiguredDate(selectedDate);
+    selectedTime.textContent = "Showing the full day for " + selectedDate;
+}
+
+function nearestVisibleIndex(panel, target) {
+    const indices = panel.indices;
+    let lo = 0;
+    let hi = indices.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (panel.item.times[indices[mid]] < target) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo >= indices.length) return indices[indices.length - 1];
+    if (lo > 0) {
+        const before = indices[lo - 1];
+        const after = indices[lo];
+        if (target - panel.item.times[before] <= panel.item.times[after] - target) return before;
+    }
+    return indices[lo];
+}
+
+function hitSnapshotAt(target, x, yPosition) {
+    if (target === null || yPosition < TOP || yPosition > height - AXIS_H) return null;
+    const panel = panelViews.find(view =>
+        yPosition >= view.geom.top && yPosition <= view.geom.bottom
+    );
+    if (!panel || !panel.indices.length) return null;
+    const index = nearestVisibleIndex(panel, target);
+    const displayTime = panel.displayTimes && panel.displayTimes.has(index)
+        ? panel.displayTimes.get(index)
+        : panel.item.times[index];
+    const pointX = x(displayTime);
+    if (Math.abs(pointX - x(target)) > SNAPSHOT_HIT_PX) return null;
+    return {
+        item: panel.item,
+        index,
+        time: panel.item.times[index],
+        dt: panel.item.rows[index].dt
+    };
+}
+
+function snapshotHitForPointer(xScale, mouseX, mouseYPosition) {
+    const pointerTime = Math.max(extent[0], Math.min(extent[1], xScale.invert(mouseX)));
+    const targetTime = nearestUnionTime(pointerTime);
+    const hit = hitSnapshotAt(targetTime, xScale, mouseYPosition);
+    return hit || { time: targetTime, item: null, index: null, dt: originalDtAt(targetTime) };
+}
+
+function visibleIndices(item, t0, t1, pixels) {
+    const start = Math.max(0, lowerBound(item.times, t0));
+    const end = Math.min(item.rows.length, upperBound(item.times, t1));
+    const count = end - start;
+    if (count <= 0) return [];
+    const step = Math.max(1, Math.ceil(count / Math.max(1, pixels / MIN_SAMPLE_PX)));
+    const result = [];
+    for (let i = start; i < end; i += step) result.push(i);
+    if (result[result.length - 1] !== end - 1) result.push(end - 1);
+    return result;
+}
+
+function rowValues(item, row) {
+    if (item.hasDepth) {
+        const bids = [];
+        const asks = [];
+        for (let level = 1; level <= 5; level++) {
+            bids.push({ px: +row["bid" + level + "_px"], vol: +row["bid" + level + "_vol"], level });
+            asks.push({ px: +row["ask" + level + "_px"], vol: +row["ask" + level + "_vol"], level });
+        }
+        return { last: +row.last_px, mid: (+row.bid1_px + +row.ask1_px) / 2, bids, asks };
+    }
+    return {
+        last: +row.price,
+        mid: Number.isFinite(+row.mid) ? +row.mid : (+row.b1p + +row.a1p) / 2,
+        bids: [{ px: +row.b1p, vol: null, level: 1 }],
+        asks: [{ px: +row.a1p, vol: null, level: 1 }]
+    };
+}
+
+function yDomain(item, indices) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    const indexSet = new Set(indices);
+    for (const i of indices) {
+        const v = rowValues(item, item.rows[i]);
+        const values = [
+            v.last,
+            v.mid,
+            ...v.bids.map(d => d.px),
+            ...v.asks.map(d => d.px)
+        ];
+        for (const value of values) {
+            if (Number.isFinite(value) && value > 0) {
+                lo = Math.min(lo, value);
+                hi = Math.max(hi, value);
+            }
+        }
+    }
+    for (const trade of item.trades || []) {
+        if (!indexSet.has(trade._rowIndex)) continue;
+        const value = tradePrice(trade, NaN);
+        if (Number.isFinite(value) && value > 0) {
+            lo = Math.min(lo, value);
+            hi = Math.max(hi, value);
+        }
+    }
+    if (!Number.isFinite(lo)) return [0, 1];
+    if (lo === hi) {
+        const delta = Math.max(Math.abs(lo) * 0.001, 0.001);
+        lo -= delta;
+        hi += delta;
+    }
+    const pad = (hi - lo) * 0.09;
+    return [lo - pad, hi + pad];
+}
+
+function panelGeometry(index) {
+    const panelCount = Math.max(1, series.length);
+    const usable = height - TOP - AXIS_H - PANEL_GAP * (panelCount - 1);
+    const focusedIndex = focusedProductKey
+        ? series.findIndex(item => item.key === focusedProductKey)
+        : -1;
+    const focusedRatio = panelCount > 1 && focusedIndex >= 0 ? 0.72 : 1 / panelCount;
+    const secondaryRatio = panelCount > 1 && focusedIndex >= 0
+        ? (1 - focusedRatio) / (panelCount - 1)
+        : 1 / panelCount;
+    const heights = series.map((_, panelIndex) =>
+        usable * (panelIndex === focusedIndex ? focusedRatio : secondaryRatio)
+    );
+    let top = TOP;
+    for (let panelIndex = 0; panelIndex < index; panelIndex++) {
+        top += heights[panelIndex] + PANEL_GAP;
+    }
+    const panelH = heights[index] || usable;
+    return { top, bottom: top + panelH, height: panelH };
+}
+
+function toggleFocusedProduct(key) {
+    focusedProductKey = focusedProductKey === key ? null : key;
+    hoverTime = null;
+    mouseY = -1;
+    tooltip.style.display = "none";
+    selectedTime.textContent = focusedProductKey
+        ? "Expanded " + (series.find(item => item.key === focusedProductKey)?.name || focusedProductKey) +
+            "; click the title again to restore all products"
+        : "All products restored";
+    scheduleRender();
+}
+
+function panelIndexAtY(y) {
+    for (let i = 0; i < series.length; i++) {
+        const geom = panelGeometry(i);
+        if (y >= geom.top && y <= geom.bottom) return i;
+    }
+    return -1;
+}
+
+function titleIndexAt(x, y) {
+    if (x < LEFT || x > LEFT + TITLE_DRAG_WIDTH) return -1;
+    const index = panelIndexAtY(y);
+    if (index < 0) return -1;
+    return y <= panelGeometry(index).top + TITLE_DRAG_HEIGHT ? index : -1;
+}
+
+function loadPanelOrder() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(PANEL_ORDER_KEY));
+        if (!Array.isArray(saved) || saved.length !== series.length) return;
+        if (!series.every(item => saved.includes(item.key))) return;
+        const byKey = new Map(series.map(item => [item.key, item]));
+        series = saved.map(key => byKey.get(key));
+    } catch (_) {
+        // Ignore unavailable or invalid local storage.
+    }
+}
+
+function savePanelOrder() {
+    try {
+        localStorage.setItem(PANEL_ORDER_KEY, JSON.stringify(series.map(item => item.key)));
+    } catch (_) {
+        // Ordering still works for the current session.
+    }
+}
+
+function resizeCanvas() {
+    const visibleDomain = baseX
+        ? transform.rescaleX(baseX).domain()
+        : null;
+    width = container.clientWidth;
+    height = container.clientHeight;
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    svg.setAttribute("width", width);
+    svg.setAttribute("height", height);
+    zoom
+        .extent([[LEFT, TOP], [width - RIGHT, height - AXIS_H]])
+        .translateExtent([[LEFT, TOP], [width - RIGHT, height - AXIS_H]]);
+    if (series.length) {
+        baseX = d3.scaleLinear().domain(extent).range([LEFT, width - RIGHT]);
+        if (visibleDomain) {
+            const domainSpan = visibleDomain[1] - visibleDomain[0];
+            const extentSpan = extent[1] - extent[0];
+            const scale = domainSpan > 0 ? extentSpan / domainSpan : transform.k;
+            const translateX = LEFT - scale * baseX(visibleDomain[0]);
+            transform = d3.zoomIdentity.translate(translateX, 0).scale(scale);
+            canvas.__zoom = transform;
+        }
+        scheduleRender();
+    }
+}
+
+function drawGridAndAxis(y, geom, item) {
+    const ticks = y.ticks(5);
+    ctx.font = canvasFont(10);
+    ctx.textBaseline = "middle";
+    for (const tick of ticks) {
+        const py = y(tick);
+        ctx.strokeStyle = "rgba(255,255,255,0.075)";
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(LEFT, py);
+        ctx.lineTo(width - RIGHT, py);
+        ctx.stroke();
+        ctx.fillStyle = "#9ba3b5";
+        ctx.textAlign = "right";
+        ctx.fillText(tick.toFixed(item.decimals), LEFT - 7, py);
+    }
+    ctx.strokeStyle = "#59617a";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(LEFT, geom.top);
+    ctx.lineTo(LEFT, geom.bottom);
+    ctx.stroke();
+    ctx.fillStyle = item.color;
+    ctx.font = canvasFont(12, "'Segoe UI', sans-serif", "bold");
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    if (panelDrag && panelDrag.key === item.key) {
+        ctx.fillStyle = "rgba(224,168,0,0.13)";
+        ctx.fillRect(LEFT + 2, geom.top + 2, TITLE_DRAG_WIDTH - 4, TITLE_DRAG_HEIGHT - 4);
+        ctx.fillStyle = item.color;
+    } else if (focusedProductKey === item.key) {
+        ctx.fillStyle = "rgba(224,168,0,0.10)";
+        ctx.fillRect(LEFT + 2, geom.top + 2, TITLE_DRAG_WIDTH - 4, TITLE_DRAG_HEIGHT - 4);
+        ctx.fillStyle = item.color;
+    }
+    ctx.fillText("::: " + item.name, LEFT + 7, geom.top + 5);
+}
+
+function fillRoundedBar(context, x, y, barWidth, barHeight, radius) {
+    const widthValue = Math.max(0, barWidth);
+    const radiusValue = Math.min(radius, widthValue / 2, barHeight / 2);
+    context.beginPath();
+    if (typeof context.roundRect === "function") {
+        context.roundRect(x, y, widthValue, barHeight, radiusValue);
+    } else {
+        context.rect(x, y, widthValue, barHeight);
+    }
+    context.fill();
+}
+
+function instructionStyle(row, index) {
+    const raw = String(row.instruction || "").trim();
+    const normalized = raw.toLowerCase().replace(/\s+/g, "_");
+    return INSTRUCTION_STYLES.find(style =>
+        style.key === normalized ||
+        style.label.toLowerCase().replace(/\s+/g, "_") === normalized ||
+        (style.rawAliases || []).includes(raw)
+    ) || INSTRUCTION_STYLES[index % INSTRUCTION_STYLES.length];
+}
+
+function tradePrice(row, fallback) {
+    const value = Number(row.price_trd);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function drawTradeMarker(context, x, y, style, alpha = 1) {
+    const r = style.radius;
+    context.save();
+    context.globalAlpha *= alpha;
+    context.fillStyle = style.color;
+    context.beginPath();
+    context.arc(x, y, r, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+}
+
+function drawTradeLabel(context, item, row, px, py, style, bounds, lane = 0, placedLabels = [], anchors = []) {
+    const padX = Math.round(5 * fontScale);
+    const padY = Math.round(5 * fontScale);
+    const contractText = rowContractName(item, row);
+    const instructionText = style.label;
+    const priceText = tradePrice(row, Number(row.price)).toFixed(item.decimals);
+    const timeText = row.dt.slice(11);
+    const compactFont = Math.max(7.5, Math.round(8 * fontScale * 10) / 10);
+    const lineH = Math.max(10, Math.round(11 * fontScale));
+    const rows = [
+        { text: contractText, font: canvasFont(compactFont, "Consolas, monospace", "bold"), color: "#eef1f7" },
+        { text: instructionText, font: canvasFont(compactFont, "'Segoe UI', sans-serif", "bold"), color: style.color },
+        { text: priceText, font: canvasFont(compactFont, "Consolas, monospace", "bold"), color: "#ffd166" },
+        { text: timeText, font: canvasFont(compactFont), color: "#9ba3b5" }
+    ];
+
+    context.save();
+    const textMaxW = rows.reduce((maxWidth, row) => {
+        context.font = row.font;
+        return Math.max(maxWidth, context.measureText(row.text).width);
+    }, 0);
+    const availableRightW = Math.max(0, width - RIGHT - 3 - (px + Math.round((18 + lane * 8) * fontScale)));
+    const availableLeftW = Math.max(0, px - Math.round((18 + lane * 8) * fontScale) - (LEFT + 3));
+    const maxAvailableW = Math.max(availableRightW, availableLeftW, 64);
+    const barW = Math.round(Math.max(64, Math.min(maxAvailableW, textMaxW + padX * 2)));
+    const topLimit = bounds ? bounds.top + 4 : TOP + 2;
+    const bottomLimit = bounds ? bounds.bottom - 4 : height - AXIS_H - 2;
+    const maxBarH = Math.max(barW, bottomLimit - topLimit);
+    const labelH = Math.round(Math.min(maxBarH, Math.max(48, rows.length * lineH + padY * 2)));
+    const labelGap = Math.round((18 + lane * 8) * fontScale);
+    const rightX = px + labelGap;
+    const leftX = px - barW - labelGap;
+    const rightFarX = px + labelGap + Math.round((barW * 0.72 + lane * 10) * fontScale);
+    const rightFartherX = px + labelGap + Math.round((barW * 1.45 + lane * 12) * fontScale);
+    const leftFarX = px - barW - labelGap - Math.round((barW * 0.72 + lane * 10) * fontScale);
+    const xCandidates = [
+        rightX,
+        rightFarX,
+        rightFartherX,
+        leftX,
+        leftFarX,
+        px - barW / 2,
+        LEFT + 8 + lane * (barW + 8),
+        width - RIGHT - barW - 8 - lane * (barW + 8)
+    ].map(xValue => Math.max(LEFT + 3, Math.min(width - RIGHT - barW - 3, xValue)));
+    const yOffsets = [
+        -labelH / 2,
+        -labelH - 10,
+        10,
+        -labelH * 0.78,
+        labelH * 0.28,
+        -labelH * 1.15,
+        labelH * 0.62,
+        -labelH * 1.7,
+        labelH * 1.05,
+        -labelH * 2.25,
+        labelH * 1.55
+    ];
+    const yCandidates = yOffsets.map(offset =>
+        Math.max(topLimit, Math.min(bottomLimit - labelH, py + offset))
+    );
+    const verticalSlots = [];
+    const slotCount = Math.max(3, Math.min(9, Math.floor((bottomLimit - topLimit) / Math.max(1, labelH * 0.72))));
+    for (let slot = 0; slot < slotCount; slot++) {
+        const ratio = slotCount === 1 ? 0.5 : slot / (slotCount - 1);
+        verticalSlots.push(topLimit + ratio * Math.max(0, bottomLimit - topLimit - labelH));
+    }
+    yCandidates.push(...verticalSlots);
+    const rectOverlap = (a, b) => {
+        const overlapW = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+        const overlapH = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+        return overlapW * overlapH;
+    };
+    const rectContainsPoint = (rect, point, pad = 5) =>
+        point.x >= rect.x - pad && point.x <= rect.x + rect.w + pad &&
+        point.y >= rect.y - pad && point.y <= rect.y + rect.h + pad;
+    let bestRect = null;
+    let bestScore = Infinity;
+    const seen = new Set();
+    for (const xCandidate of xCandidates) {
+        for (const yCandidate of yCandidates) {
+            const key = Math.round(xCandidate) + "," + Math.round(yCandidate);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const rect = { x: xCandidate, y: yCandidate, w: barW, h: labelH };
+            const pointPenalty = anchors.reduce((sum, point) =>
+                sum + (rectContainsPoint(rect, point) ? 100000 : 0), 0
+            );
+            const overlapPenalty = placedLabels.reduce((sum, placed) => {
+                const overlap = rectOverlap(rect, placed);
+                const allowed = Math.min(rect.w * rect.h, placed.w * placed.h) * 0.06;
+                return sum + Math.max(0, overlap - allowed) * 36 + overlap * 2.5;
+            }, 0);
+            const distancePenalty = Math.abs(rect.x - rightX) * 0.035 + Math.abs(rect.y + labelH / 2 - py) * 0.055;
+            const score = pointPenalty + overlapPenalty + distancePenalty;
+            if (score < bestScore) {
+                bestScore = score;
+                bestRect = rect;
+            }
+        }
+    }
+    const labelX = bestRect ? bestRect.x : rightX;
+    const labelY = bestRect ? bestRect.y : Math.max(topLimit, Math.min(bottomLimit - labelH, py - labelH / 2));
+    placedLabels.push({ x: labelX, y: labelY, w: barW, h: labelH });
+
+    context.globalAlpha *= 0.94;
+    context.fillStyle = "rgba(7, 10, 24, 0.92)";
+    context.strokeStyle = style.color;
+    context.lineWidth = 1;
+    if (typeof context.roundRect === "function") {
+        context.beginPath();
+        context.roundRect(labelX, labelY, barW, labelH, 4);
+        context.fill();
+        context.stroke();
+    } else {
+        context.fillRect(labelX, labelY, barW, labelH);
+        context.strokeRect(labelX, labelY, barW, labelH);
+    }
+
+    context.fillStyle = style.color;
+    context.fillRect(labelX, labelY, barW, 3);
+
+    context.beginPath();
+    context.rect(labelX, labelY + 4, barW, labelH - 8);
+    context.clip();
+
+    context.textBaseline = "middle";
+    context.textAlign = "left";
+    let textY = labelY + padY + lineH / 2;
+    for (const row of rows) {
+        if (textY > labelY + labelH - padY) break;
+        context.font = row.font;
+        context.fillStyle = row.color;
+        context.fillText(row.text, labelX + padX, textY);
+        textY += lineH;
+    }
+    context.restore();
+}
+
+function drawSeries(item, indices, x, y, detailProgress, targetIndex, displayTimes, panelOpacity = 1, labelQueue = null) {
+    if (!indices.length) return;
+    const plotWidth = width - LEFT - RIGHT;
+    const spacing = plotWidth / Math.max(indices.length - 1, 1);
+    const singleSnapshot = detailProgress >= 0.999 && indices.length === 1;
+    const compactBarW = Math.max(1.5, Math.min(10, spacing * 0.42));
+    const expandedBarW = Math.min(
+        plotWidth * 0.35,
+        Math.max(60, spacing * 4)
+    );
+    const maxBarW = singleSnapshot
+        ? Math.max(80, plotWidth * 0.35)
+        : compactBarW + (expandedBarW - compactBarW) * detailProgress;
+    const pointXs = indices.map(i => {
+        const displayTime = displayTimes && displayTimes.has(i) ? displayTimes.get(i) : item.times[i];
+        return x(displayTime);
+    });
+    const nearestGaps = pointXs.map((px, position) => {
+        let leftGap = Infinity;
+        let rightGap = Infinity;
+        for (let i = position - 1; i >= 0; i--) {
+            if (pointXs[i] < px) {
+                leftGap = px - pointXs[i];
+                break;
+            }
+        }
+        for (let i = position + 1; i < pointXs.length; i++) {
+            if (pointXs[i] > px) {
+                rightGap = pointXs[i] - px;
+                break;
+            }
+        }
+        const gap = Math.min(leftGap, rightGap);
+        const fallbackGap = singleSnapshot
+            ? plotWidth * 0.35
+            : Math.max(6, Math.min(24, spacing));
+        return Number.isFinite(gap) ? gap : fallbackGap;
+    });
+    const rectH = 4 + detailProgress * 6;
+
+    ctx.save();
+    const labelBounds = { top: TOP + 4, bottom: height - AXIS_H - 4 };
+    ctx.beginPath();
+    ctx.rect(LEFT, y.range()[1], plotWidth, y.range()[0] - y.range()[1]);
+    ctx.clip();
+
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(255,209,102,0.72)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    // Keep the overview at full color throughout zooming; it disappears only
+    // when the single-snapshot detail view is fully reached.
+    ctx.globalAlpha = detailProgress >= 0.999 ? 0 : panelOpacity;
+    let started = false;
+    let previousRow = null;
+    for (const i of indices) {
+        const row = item.rows[i];
+        const v = rowValues(item, row);
+        const displayTime = displayTimes && displayTimes.has(i) ? displayTimes.get(i) : item.times[i];
+        const px = x(displayTime);
+        const py = y(v.mid);
+        if (!Number.isFinite(py)) continue;
+        if (!started || !sameContinuousSeries(previousRow, row)) {
+            ctx.moveTo(px, py);
+            started = true;
+        } else {
+            ctx.lineTo(px, py);
+        }
+        previousRow = row;
+    }
+    if (started) ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = panelOpacity;
+
+    const labelCandidates = [];
+    const visibleDomain = x.domain();
+    indices.forEach((i, position) => {
+        const isTarget = i === targetIndex;
+        ctx.globalAlpha = panelOpacity * (isTarget || detailProgress < 0.999 ? 1 : 0);
+        if (ctx.globalAlpha <= 0.001) return;
+        const row = item.rows[i];
+        const v = rowValues(item, row);
+        const px = pointXs[position];
+        const compactGapLimit = Math.max(4, nearestGaps[position] * 0.72);
+        const gapLimit = isTarget
+            ? compactGapLimit + (plotWidth * 0.35 - compactGapLimit) * detailProgress
+            : compactGapLimit;
+        const snapshotMaxBarW = Math.min(maxBarW, gapLimit);
+        const quoteBarLimit = 22 + (72 - 22) * (isTarget ? detailProgress : 0);
+        const fixedQuoteBarW = Math.max(4, Math.min(
+            quoteBarLimit,
+            isTarget
+                ? nearestGaps[position] * 0.62 +
+                    (plotWidth * 0.35 - nearestGaps[position] * 0.62) * detailProgress
+                : nearestGaps[position] * 0.62
+        ));
+        const maxVol = item.hasDepth
+            ? Math.max(1, ...v.bids.map(d => d.vol), ...v.asks.map(d => d.vol))
+            : 1;
+        for (const bid of v.bids) {
+            const volumeRatio = item.hasDepth ? Math.sqrt(Math.max(0, bid.vol) / maxVol) : 1;
+            const barW = item.hasDepth
+                ? Math.max(Math.min(6, snapshotMaxBarW), volumeRatio * snapshotMaxBarW)
+                : fixedQuoteBarW;
+            const levelInset = item.hasDepth && isTarget
+                ? (bid.level - 1) * 3 * detailProgress
+                : 0;
+            ctx.fillStyle = BID_COLORS[bid.level - 1];
+            fillRoundedBar(
+                ctx,
+                px + levelInset,
+                y(bid.px) - rectH / 2,
+                Math.max(4, barW - levelInset),
+                rectH,
+                2 + detailProgress * 2
+            );
+        }
+        for (const ask of v.asks) {
+            const volumeRatio = item.hasDepth ? Math.sqrt(Math.max(0, ask.vol) / maxVol) : 1;
+            const barW = item.hasDepth
+                ? Math.max(Math.min(6, snapshotMaxBarW), volumeRatio * snapshotMaxBarW)
+                : fixedQuoteBarW;
+            const levelInset = item.hasDepth && isTarget
+                ? (ask.level - 1) * 3 * detailProgress
+                : 0;
+            ctx.fillStyle = ASK_COLORS[ask.level - 1];
+            fillRoundedBar(
+                ctx,
+                px + levelInset,
+                y(ask.px) - rectH / 2,
+                Math.max(4, barW - levelInset),
+                rectH,
+                2 + detailProgress * 2
+            );
+        }
+        const compactDotRadius = Math.min(3.2, Math.max(1.2, spacing * 0.25));
+        const dotRadius = isTarget
+            ? compactDotRadius + (5 - compactDotRadius) * detailProgress
+            : compactDotRadius;
+        ctx.fillStyle = "#e4e7ee";
+        ctx.beginPath();
+        ctx.arc(px, y(v.last), Math.max(1, dotRadius * 0.68), 0, Math.PI * 2);
+        ctx.fill();
+        if (isTarget && detailProgress > 0.5) {
+            ctx.beginPath();
+            ctx.arc(px, y(v.last), Math.max(1, dotRadius * 0.68), 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(255,255,255,0.8)";
+            ctx.lineWidth = 1.5 * detailProgress;
+            ctx.stroke();
+        }
+    });
+    for (let tradeIndex = 0; tradeIndex < (item.trades || []).length; tradeIndex++) {
+        const trade = item.trades[tradeIndex];
+        if (!Number.isFinite(trade._displayTime)) continue;
+        if (trade._displayTime < visibleDomain[0] || trade._displayTime > visibleDomain[1]) continue;
+        if (detailProgress >= 0.999 && trade._rowIndex !== targetIndex) continue;
+        const px = x(trade._displayTime);
+        const trdY = y(tradePrice(trade, NaN));
+        if (!Number.isFinite(trdY)) continue;
+        const style = instructionStyle(trade, tradeIndex);
+        const isSelectedTrade = tradeListEntryKey(item, tradeIndex) === selectedTradeListKey;
+        const nearestRowIndex = Math.max(0, Math.min(item.rows.length - 1, trade._rowIndex));
+        const visiblePosition = indices.indexOf(nearestRowIndex);
+        const gap = visiblePosition >= 0 ? nearestGaps[visiblePosition] : Math.max(6, Math.min(24, spacing));
+        const tradeRadius = Math.max(style.radius, Math.min(2.1, Math.max(1.2, spacing * 0.18)));
+        drawTradeMarker(ctx, px, trdY, { ...style, radius: tradeRadius });
+        const pointIsOnScreen = px >= LEFT && px <= width - RIGHT &&
+            trdY >= y.range()[1] && trdY <= y.range()[0];
+        if (pointIsOnScreen) {
+            labelCandidates.push({
+                item,
+                row: trade,
+                px,
+                py: trdY,
+                style,
+                gap,
+                selected: isSelectedTrade
+            });
+        }
+    }
+    const visibleSpanMs = visibleDomain[1] - visibleDomain[0];
+    const visibleLabelCandidates = [];
+    if (visibleSpanMs <= TRADE_LABEL_MAX_VISIBLE_SPAN_MS) {
+        for (const candidate of labelCandidates) {
+            const isFarEnough = visibleLabelCandidates.every(other =>
+                Math.hypot(candidate.px - other.px, candidate.py - other.py) >=
+                    TRADE_LABEL_MIN_POINT_DISTANCE_PX
+            );
+            if (isFarEnough) visibleLabelCandidates.push(candidate);
+        }
+    }
+    const shouldShowTradeLabels = visibleLabelCandidates.length > 0;
+    ctx.globalAlpha = panelOpacity;
+    ctx.restore();
+    if (shouldShowTradeLabels) {
+        if (labelQueue) {
+            visibleLabelCandidates.forEach((candidate, labelIndex) => {
+                labelQueue.push({
+                    ...candidate,
+                    bounds: labelBounds,
+                    opacity: panelOpacity,
+                    lane: labelIndex % 3
+                });
+            });
+        } else {
+            ctx.save();
+            ctx.globalAlpha = panelOpacity;
+            visibleLabelCandidates.forEach((candidate, labelIndex) => {
+                drawTradeLabel(
+                    ctx,
+                    candidate.item,
+                    candidate.row,
+                    candidate.px,
+                    candidate.py,
+                    candidate.style,
+                    labelBounds,
+                    labelIndex % 3
+                );
+            });
+            ctx.restore();
+        }
+    }
+}
+
+function drawTimeAxis(x) {
+    const y = height - AXIS_H + 7;
+    ctx.strokeStyle = "#6d758b";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(LEFT, y);
+    ctx.lineTo(width - RIGHT, y);
+    ctx.stroke();
+
+    const domain = x.domain();
+    const domainStartTime = nearestUnionTime(
+        Math.max(extent[0], Math.min(extent[1], domain[0]))
+    );
+    const domainEndTime = nearestUnionTime(
+        Math.max(extent[0], Math.min(extent[1], domain[1]))
+    );
+    const includeDate = datePart(originalDtAt(domainStartTime)) !==
+        datePart(originalDtAt(domainEndTime));
+    const includeMs = domain[1] - domain[0] <= detailTransitionStartMs;
+    const start = lowerBound(unionTimes, domain[0]);
+    const end = upperBound(unionTimes, domain[1]);
+    const visibleCount = end - start;
+    const labelWidth = (includeMs ? 168 : 110) * fontScale;
+    const targetCount = Math.max(2, Math.min(9, Math.floor((width - LEFT - RIGHT) / labelWidth)));
+    const candidates = [];
+    if (visibleCount > 0) {
+        for (let i = 0; i < targetCount; i++) {
+            const targetX = targetCount === 1
+                ? (LEFT + width - RIGHT) / 2
+                : LEFT + i * (width - RIGHT - LEFT) / (targetCount - 1);
+            const targetTime = x.invert(targetX);
+            let index = lowerBound(unionTimes, targetTime);
+            index = Math.max(start, Math.min(end - 1, index));
+            if (index > start &&
+                Math.abs(unionTimes[index - 1] - targetTime) <= Math.abs(unionTimes[index] - targetTime)) {
+                index--;
+            }
+            const tick = unionTimes[index];
+            if (!candidates.length || candidates[candidates.length - 1] !== tick) candidates.push(tick);
+        }
+    }
+    const ticks = [];
+    let lastTickX = -Infinity;
+    for (const tick of candidates) {
+        const tickX = x(tick);
+        if (tickX - lastTickX < labelWidth * 0.9) continue;
+        ticks.push(tick);
+        lastTickX = tickX;
+    }
+    ctx.fillStyle = "#a8afbd";
+    ctx.font = canvasFont(10);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (const tick of ticks) {
+        const px = x(tick);
+        ctx.beginPath();
+        ctx.moveTo(px, y);
+        ctx.lineTo(px, y + 5);
+        ctx.stroke();
+        const rawDt = originalDtAt(tick);
+        const label = includeMs
+            ? rawDt.slice(11)
+            : includeDate ? rawDt.slice(5, 19) : rawDt.slice(11, 19);
+        const labelX = Math.max(
+            LEFT + labelWidth / 2,
+            Math.min(width - RIGHT - labelWidth / 2, px)
+        );
+        ctx.fillText(label, labelX, y + 8);
+    }
+    ctx.fillStyle = "#858da0";
+    ctx.font = canvasFont(11, "'Segoe UI', sans-serif");
+    ctx.fillText("Combined Timeline for Selected Products", (LEFT + width - RIGHT) / 2, height - 14);
+}
+
+function drawOverlay(x) {
+    const selected = pinnedTime !== null ? pinnedTime : hoverTime;
+    if (selected === null) {
+        svg.innerHTML = "";
+        return;
+    }
+    const px = x(selected);
+    if (px < LEFT || px > width - RIGHT) {
+        svg.innerHTML = "";
+        return;
+    }
+    const color = pinnedTime !== null ? "#e0a800" : "rgba(255,255,255,0.68)";
+    const hits = [];
+    for (const panel of panelViews) {
+        if (!panel.indices.length) continue;
+        const pinnedIndexIsVisible =
+            pinnedTime !== null &&
+            panel.item.key === pinnedProductKey &&
+            panel.indices.includes(pinnedRowIndex);
+        const index = pinnedIndexIsVisible
+            ? pinnedRowIndex
+            : nearestVisibleIndex(panel, selected);
+        const displayTime = panel.displayTimes && panel.displayTimes.has(index)
+            ? panel.displayTimes.get(index)
+            : panel.item.times[index];
+        const pointX = x(displayTime);
+        if (Math.abs(pointX - px) > SNAPSHOT_HIT_PX) continue;
+        const row = panel.item.rows[index];
+        const values = rowValues(panel.item, row);
+        const py = panel.y(values.last);
+        if (py < panel.geom.top || py > panel.geom.bottom) continue;
+        hits.push({
+            panel,
+            index,
+            pointX,
+            py,
+            dt: row.dt,
+            name: rowContractName(panel.item, row),
+            faded: focusedProductKey && panel.item.key !== focusedProductKey
+        });
+    }
+    const primaryHit = hits.find(hit => !hit.faded) || hits[0] || null;
+    const lineX = primaryHit ? primaryHit.pointX : px;
+    let markup = '<line x1="' + lineX + '" y1="' + TOP + '" x2="' + lineX + '" y2="' + (height - AXIS_H + 7) +
+        '" stroke="' + color + '" stroke-width="' + (pinnedTime !== null ? 2 : 1) + '" stroke-dasharray="5,4"/>';
+    for (const hit of hits) {
+        markup += '<circle cx="' + hit.pointX + '" cy="' + hit.py +
+            '" r="8" fill="rgba(15,21,48,0.72)" stroke="' + color +
+            '" stroke-width="2" opacity="' + (hit.faded ? 0.18 : 1) + '"/>';
+        markup += '<circle cx="' + hit.pointX + '" cy="' + hit.py +
+            '" r="4.5" fill="#eef1f7" stroke="rgba(255,255,255,0.95)" stroke-width="1" opacity="' +
+            (hit.faded ? 0.18 : 1) + '"/>';
+    }
+    if (hits.length) {
+        const overlayFontSize = Math.round(11 * fontScale * 10) / 10;
+        const overlayLineHeight = Math.max(17, Math.round(17 * fontScale));
+        const boxW = Math.round(292 * Math.max(1, fontScale));
+        const boxH = 10 + hits.length * overlayLineHeight;
+        const boxX = Math.max(LEFT + 4, Math.min(width - RIGHT - boxW - 4, lineX + 12));
+        markup += '<rect x="' + boxX + '" y="5" width="' + boxW + '" height="' + boxH +
+            '" rx="4" fill="rgba(5,8,20,0.94)" stroke="' + color + '"/>';
+        hits.forEach((hit, i) => {
+            markup += '<text x="' + (boxX + 8) + '" y="' + (21 + i * overlayLineHeight) + '" fill="' +
+                hit.panel.item.color + '" font-size="' + overlayFontSize +
+                '" font-family="Consolas,monospace" opacity="' +
+                (hit.faded ? 0.3 : 1) + '">' +
+                hit.name + "  " + hit.dt + "</text>";
+        });
+    }
+    if (pinnedTime === null && hoverTime !== null && mouseY >= TOP && mouseY <= height - AXIS_H) {
+        markup += '<line x1="' + LEFT + '" y1="' + mouseY + '" x2="' + (width - RIGHT) + '" y2="' +
+            mouseY + '" stroke="rgba(255,255,255,0.25)" stroke-width="1" stroke-dasharray="4,4"/>';
+    }
+    svg.innerHTML = markup;
+}
+
+function render() {
+    raf = null;
+    if (!series.length || !baseX) return;
+    const x = transform.rescaleX(baseX);
+    const t0 = x.invert(LEFT);
+    const t1 = x.invert(width - RIGHT);
+    const viewSpan = Math.max(detailTransitionEndMs, t1 - t0);
+    const rawDetailProgress = Math.max(0, Math.min(1,
+        (Math.log(detailTransitionStartMs) - Math.log(viewSpan)) /
+        (Math.log(detailTransitionStartMs) - Math.log(detailTransitionEndMs))
+    ));
+    const detailProgress = rawDetailProgress * rawDetailProgress * (3 - 2 * rawDetailProgress);
+    const detailMode = detailProgress > 0;
+    let focusTime = (t0 + t1) / 2;
+    if (pinnedTime !== null) focusTime = pinnedTime;
+    else if (zoomAnchorTime !== null) focusTime = zoomAnchorTime;
+    else if (detailMode) focusTime = nearestUnionTime(focusTime);
+    viewX = x;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, width, height);
+
+    const targetSnapshots = series.map(item => {
+        const exactIndex = lowerBound(item.times, focusTime);
+        const hasExactSnapshot = exactIndex < item.times.length &&
+            item.times[exactIndex] === focusTime;
+        const targetIndex = hasExactSnapshot
+            ? exactIndex
+            : previousIndexOrNull(item, focusTime);
+        return {
+            key: item.key,
+            targetIndex,
+            targetTime: targetIndex === null ? null : item.times[targetIndex],
+            hasExactSnapshot
+        };
+    });
+    const historicalTargets = targetSnapshots
+        .filter(target => target.targetTime !== null && !target.hasExactSnapshot);
+    const historicalMinTime = historicalTargets.length
+        ? Math.min(...historicalTargets.map(target => target.targetTime))
+        : focusTime;
+    const historicalMaxTime = historicalTargets.length
+        ? Math.max(...historicalTargets.map(target => target.targetTime))
+        : focusTime;
+    const historicalLaneStartX = LEFT + DETAIL_EDGE_INSET_PX;
+    const historicalLaneWidth = Math.min(64, (width - LEFT - RIGHT) * 0.06);
+    const targetXByKey = new Map(targetSnapshots.map(target => {
+        if (target.targetTime === null) return [target.key, historicalLaneStartX];
+        if (target.hasExactSnapshot) return [target.key, x(focusTime)];
+        const ratio = historicalMaxTime === historicalMinTime
+            ? 0
+            : (target.targetTime - historicalMinTime) /
+                (historicalMaxTime - historicalMinTime);
+        return [target.key, historicalLaneStartX + ratio * historicalLaneWidth];
+    }));
+
+    const counts = [];
+    const tradeLabelQueue = [];
+    panelViews = [];
+    series.forEach((item, index) => {
+        const geom = panelGeometry(index);
+        const panelIsFaded = focusedProductKey && item.key !== focusedProductKey;
+        const target = targetSnapshots.find(candidate => candidate.key === item.key);
+        const targetIndex = target.targetIndex;
+        let indices = visibleIndices(item, t0, t1, width - LEFT - RIGHT);
+        if (targetIndex !== null && !indices.includes(targetIndex)) {
+            indices = [...indices, targetIndex].sort((a, b) => a - b);
+        }
+        if (detailProgress >= 0.999) {
+            indices = targetIndex === null ? [] : [targetIndex];
+        }
+        if (pinnedTime !== null && item.key === pinnedProductKey) {
+            const pinnedIndex = pinnedRowIndex;
+            if (!indices.includes(pinnedIndex)) {
+                indices = [...indices, pinnedIndex].sort((a, b) => a - b);
+            }
+        }
+        const displayTimes = new Map();
+        if (detailMode && targetIndex !== null) {
+            const targetX = targetXByKey.get(item.key);
+            const actualX = x(item.times[targetIndex]);
+            const displayX = actualX + (targetX - actualX) * detailProgress;
+            displayTimes.set(targetIndex, x.invert(displayX));
+        }
+        counts.push(indices.length);
+        const fullDomain = yDomain(item, indices);
+        const targetDomain = targetIndex === null ? fullDomain : yDomain(item, [targetIndex]);
+        const domain = [
+            fullDomain[0] + (targetDomain[0] - fullDomain[0]) * detailProgress,
+            fullDomain[1] + (targetDomain[1] - fullDomain[1]) * detailProgress
+        ];
+        const yRange = [
+            geom.bottom - 14 * detailProgress,
+            geom.top + (TITLE_DRAG_HEIGHT + 10) * detailProgress
+        ];
+        const y = d3.scaleLinear().domain(domain).range(yRange);
+        panelViews.push({ item, y, geom, indices, displayTimes });
+        ctx.save();
+        ctx.globalAlpha = panelIsFaded ? 0.18 : 1;
+        drawGridAndAxis(y, geom, item);
+        drawSeries(
+            item,
+            indices,
+            x,
+            y,
+            detailProgress,
+            targetIndex,
+            displayTimes,
+            panelIsFaded ? 0.18 : 1,
+            tradeLabelQueue
+        );
+        ctx.restore();
+        if (index < series.length - 1) {
+            ctx.strokeStyle = "rgba(255,255,255,0.12)";
+            ctx.beginPath();
+            ctx.moveTo(LEFT, geom.bottom + PANEL_GAP / 2);
+            ctx.lineTo(width - RIGHT, geom.bottom + PANEL_GAP / 2);
+            ctx.stroke();
+        }
+    });
+    drawTimeAxis(x);
+    const labelAnchors = tradeLabelQueue.map(label => ({ x: label.px, y: label.py }));
+    const placedTradeLabels = [];
+    for (const label of tradeLabelQueue) {
+        ctx.save();
+        ctx.globalAlpha = label.opacity;
+        drawTradeLabel(
+            ctx,
+            label.item,
+            label.row,
+            label.px,
+            label.py,
+            label.style,
+            label.bounds,
+            label.lane,
+            placedTradeLabels,
+            labelAnchors
+        );
+        ctx.restore();
+    }
+    drawOverlay(x);
+    if (detailMode && pinnedTime === null) updateDetails(focusTime);
+    const recordSummary = series.map(item =>
+        item.key + " " + item.rows.length.toLocaleString()
+    ).join(" | ");
+    stats.textContent = "Total records: " + recordSummary +
+        "  |  Combined timestamps: " + unionTimes.length.toLocaleString() +
+        "  |  Visible samples: " + counts.join(" / ") +
+        "  |  Time precision: ns (9 digits)" +
+        "  |  Zoom: " + transform.k.toFixed(2) + "x" +
+        (detailMode ? "  |  Main-chart snapshot zoom: " + Math.round(detailProgress * 100) + "%" : "") +
+        "  |  [R] Reset";
+}
+
+function scheduleRender() {
+    if (raf === null) raf = requestAnimationFrame(render);
+}
+
+function makeBookCards() {
+    bookCards.innerHTML = "";
+    for (const item of series) {
+        const card = document.createElement("div");
+        card.className = "book-card";
+        card.dataset.key = item.key;
+        card.innerHTML =
+            '<div class="book-header"><span class="book-name">' + item.name +
+            '</span><span class="book-time">--</span></div>' +
+            '<canvas></canvas><div class="book-note">' +
+            (item.hasDepth ? "Five price levels and quantities; bar widths are normalized to the largest quantity in this snapshot" : "Source data contains only best bid/ask prices and no depth quantities") +
+            "</div>";
+        card.title = "Click to view adjacent snapshots at -2 / -1 / 0 / +1 / +2 for the selected product";
+        bookCards.appendChild(card);
+    }
+}
+
+function renderBook(canvasEl, item, row) {
+    canvasEl._bookItem = item;
+    canvasEl._bookRow = row;
+    const cssW = canvasEl.clientWidth;
+    const cssH = canvasEl.clientHeight;
+    const ratio = window.devicePixelRatio || 1;
+    canvasEl.width = Math.round(cssW * ratio);
+    canvasEl.height = Math.round(cssH * ratio);
+    const c = canvasEl.getContext("2d");
+    c.setTransform(ratio, 0, 0, ratio, 0, 0);
+    c.fillStyle = "#0f1530";
+    c.fillRect(0, 0, cssW, cssH);
+
+    const v = rowValues(item, row);
+    const centerX = 87;
+    const centerY = cssH / 2;
+    const plotW = Math.max(40, cssW - centerX - 50);
+    const lineH = item.hasDepth ? 17 : 30;
+    const maxVol = item.hasDepth
+        ? Math.max(1, ...v.bids.map(d => d.vol), ...v.asks.map(d => d.vol))
+        : 1;
+
+    function levelRow(entry, isAsk, index) {
+        const direction = isAsk ? -1 : 1;
+        const py = centerY + direction * (18 + index * lineH);
+        const barW = item.hasDepth ? Math.max(3, entry.vol / maxVol * plotW * 0.78) : plotW * 0.55;
+        c.fillStyle = isAsk ? ASK_COLORS[index] : BID_COLORS[index];
+        c.fillRect(centerX, py - 6, barW, 12);
+        c.fillStyle = isAsk ? "#8ff0a4" : "#ff9a9a";
+        c.font = canvasFont(11);
+        c.textAlign = "right";
+        c.textBaseline = "middle";
+        c.fillText(entry.px.toFixed(item.decimals), centerX - 6, py);
+        c.fillStyle = "#a1a8b8";
+        c.textAlign = "left";
+        c.fillText(entry.vol === null ? "Bid/Ask" : String(entry.vol), centerX + barW + 5, py);
+    }
+
+    v.asks.forEach((entry, index) => levelRow(entry, true, index));
+    v.bids.forEach((entry, index) => levelRow(entry, false, index));
+    c.fillStyle = "#eceff5";
+    c.beginPath();
+    c.arc(centerX, centerY, 4, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "#d7dbe5";
+    c.font = canvasFont(11);
+    c.textAlign = "right";
+    c.textBaseline = "middle";
+    c.fillText(v.last.toFixed(item.decimals), centerX - 6, centerY);
+    c.fillStyle = "#ffd166";
+    c.textAlign = "left";
+    c.fillText("Mid " + v.mid.toFixed(item.decimals), centerX + 10, centerY);
+}
+
+function openSnapshotSection(clickedKey) {
+    const clickedItem = series.find(item => item.key === clickedKey);
+    if (!clickedItem) return;
+    const clickedCard = bookCards.querySelector('.book-card[data-key="' + clickedKey + '"]');
+    const clickedIndex = Number(clickedCard && clickedCard.dataset.rowIndex);
+    if (!Number.isInteger(clickedIndex)) return;
+
+    const anchorTime = clickedItem.times[clickedIndex];
+    const orderedItems = [
+        clickedItem,
+        ...series.filter(item => item.key !== clickedKey)
+    ];
+    const clickedRow = clickedItem.rows[clickedIndex];
+    snapshotSectionTitle.textContent =
+        rowContractName(clickedItem, clickedRow) + " Adjacent Snapshots Around Point 0";
+    snapshotSectionSubtitle.textContent = clickedRow.dt;
+    snapshotGrid.innerHTML = "";
+    snapshotGrid.style.gridTemplateColumns =
+        "repeat(" + Math.max(1, orderedItems.length) + ", minmax(250px, 1fr))";
+
+    for (const item of orderedItems) {
+        const zeroIndex = item.key === clickedKey
+            ? clickedIndex
+            : previousIndex(item, anchorTime);
+        const column = document.createElement("section");
+        column.className = "snapshot-column" + (item.key === clickedKey ? " primary" : "");
+        const title = document.createElement("div");
+        title.className = "snapshot-column-title";
+        title.style.color = item.color;
+        title.textContent = rowContractName(item, item.rows[zeroIndex]);
+        column.appendChild(title);
+
+        for (let offset = -2; offset <= 2; offset++) {
+            const rowIndex = zeroIndex + offset;
+            const cell = document.createElement("div");
+            cell.className = "snapshot-cell" +
+                (offset === 0 ? " zero" : "") +
+                (rowIndex < 0 || rowIndex >= item.rows.length ? " unavailable" : "");
+            const header = document.createElement("div");
+            header.className = "snapshot-cell-header";
+            header.innerHTML =
+                '<span class="snapshot-offset">' + (offset > 0 ? "+" : "") + offset + "</span>" +
+                '<span class="snapshot-dt">' +
+                (rowIndex >= 0 && rowIndex < item.rows.length ? item.rows[rowIndex].dt : "No adjacent data") +
+                "</span>";
+            cell.appendChild(header);
+            if (rowIndex >= 0 && rowIndex < item.rows.length) {
+                const bookCanvas = document.createElement("canvas");
+                cell.appendChild(bookCanvas);
+                requestAnimationFrame(() => renderBook(bookCanvas, item, item.rows[rowIndex]));
+            } else {
+                const missing = document.createElement("div");
+                missing.className = "snapshot-missing";
+                missing.textContent = "Outside the data range";
+                cell.appendChild(missing);
+            }
+            column.appendChild(cell);
+        }
+        snapshotGrid.appendChild(column);
+    }
+    snapshotSection.classList.add("open");
+    snapshotSection.setAttribute("aria-hidden", "false");
+    snapshotSection.scrollTop = 0;
+    tooltip.style.display = "none";
+}
+
+function closeSnapshotSection() {
+    snapshotSection.classList.remove("open");
+    snapshotSection.setAttribute("aria-hidden", "true");
+}
+
+function updateDetails(targetTime) {
+    selectedTime.textContent = (pinnedTime !== null ? "Pinned: " : "Current: ") +
+        originalDtAt(targetTime);
+    const cards = bookCards.querySelectorAll(".book-card");
+    series.forEach((item, index) => {
+        const i = pinnedTime !== null && item.key === pinnedProductKey
+            ? pinnedRowIndex
+            : previousIndex(item, targetTime);
+        const row = item.rows[i];
+        const card = cards[index];
+        card.dataset.rowIndex = String(i);
+        card.classList.toggle("active", Math.abs(item.times[i] - targetTime) < 1);
+        card.querySelector(".book-name").textContent = rowContractName(item, row);
+        card.querySelector(".book-time").textContent = row.dt;
+        renderBook(card.querySelector("canvas"), item, row);
+    });
+}
+
+bookCards.addEventListener("click", (event) => {
+    const card = event.target.closest(".book-card");
+    if (!card || !series.length) return;
+    openSnapshotSection(card.dataset.key);
+});
+
+snapshotSectionClose.addEventListener("click", closeSnapshotSection);
+
+function updateTooltip(targetTime, clientX, clientY) {
+    const hit = whiteCircleHit(targetTime);
+    const lines = hit
+        ? ['<span style="color:#ffd166">White-point timestamp</span> ' +
+            '<span style="color:#eef1f7">' + hit.row.dt + "</span>"]
+        : [];
+    for (const item of series) {
+        const i = pinnedTime !== null && item.key === pinnedProductKey
+            ? pinnedRowIndex
+            : previousIndex(item, targetTime);
+        const row = item.rows[i];
+        const v = rowValues(item, row);
+        lines.push(
+            '<span style="color:' + item.color + '">' + rowContractName(item, row) + "</span> " +
+            '<span style="color:#8f98ad">' + row.dt + "</span>" +
+            "<br>&nbsp;&nbsp;" +
+            '<span class="bid-text">B ' + v.bids[0].px.toFixed(item.decimals) + "</span> / " +
+            '<span class="ask-text">A ' + v.asks[0].px.toFixed(item.decimals) + "</span> " +
+            "L " + v.last.toFixed(item.decimals)
+        );
+    }
+    tooltip.innerHTML = lines.join("<br>");
+    tooltip.style.display = "block";
+    tooltip.style.left = Math.min(clientX + 12, width - 380) + "px";
+    tooltip.style.top = Math.max(5, Math.min(clientY - 25, height - 185)) + "px";
+}
+
+const zoom = d3.zoom()
+    .scaleExtent([1, 400])
+    .filter((event) => {
+        if (panelDrag) return false;
+        if (event.type === "mousedown") {
+            const rect = canvas.getBoundingClientRect();
+            return titleIndexAt(event.clientX - rect.left, event.clientY - rect.top) < 0;
+        }
+        return !event.ctrlKey || event.type === "wheel";
+    })
+    .wheelDelta((event) => -event.deltaY * (event.deltaMode ? 0.08 : 0.004))
+    .on("zoom", (event) => {
+        let nextTransform = event.transform;
+        if (event.sourceEvent && event.sourceEvent.type === "wheel") {
+            if (pinnedTime !== null) {
+                zoomAnchorTime = pinnedTime;
+            } else if (zoomAnchorTime === null) {
+                const currentX = viewX || transform.rescaleX(baseX);
+                const hit = hitSnapshotAt(hoverTime, currentX, mouseY);
+                if (hit) {
+                    zoomAnchorTime = hit.time;
+                    hoverTime = hit.time;
+                }
+            }
+            if (zoomAnchorTime !== null) {
+                const centerX = (LEFT + width - RIGHT) / 2;
+                const tx = centerX - nextTransform.k * baseX(zoomAnchorTime);
+                nextTransform = d3.zoomIdentity.translate(tx, 0).scale(nextTransform.k);
+                canvas.__zoom = nextTransform;
+            }
+        }
+        transform = nextTransform;
+        scheduleRender();
+    });
+d3.select(canvas).call(zoom);
+
+canvas.addEventListener("mousedown", (event) => {
+    if (!series.length || event.button !== 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const index = titleIndexAt(event.clientX - rect.left, event.clientY - rect.top);
+    if (index < 0) return;
+    panelDrag = {
+        key: series[index].key,
+        index,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false
+    };
+    suppressCanvasClick = true;
+    canvas.style.cursor = "grabbing";
+    tooltip.style.display = "none";
+    event.preventDefault();
+    event.stopPropagation();
+    scheduleRender();
+});
+
+canvas.addEventListener("mousemove", (event) => {
+    if (!series.length || !baseX) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = event.clientX - rect.left;
+    mouseY = event.clientY - rect.top;
+    if (panelDrag) return;
+    if (!panelDrag) {
+        canvas.style.cursor = titleIndexAt(mx, mouseY) >= 0 ? "pointer" : "crosshair";
+    }
+    zoomAnchorTime = null;
+    if (mx < LEFT || mx > width - RIGHT || mouseY < TOP || mouseY > height - AXIS_H) {
+        hoverTime = null;
+        tooltip.style.display = "none";
+        scheduleRender();
+        return;
+    }
+    const x = viewX || transform.rescaleX(baseX);
+    if (pinnedTime === null) {
+        const hit = snapshotHitForPointer(x, mx, mouseY);
+        hoverTime = hit.time;
+        updateDetails(hoverTime);
+    } else {
+        hoverTime = pinnedTime;
+    }
+    updateTooltip(pinnedTime !== null ? pinnedTime : hoverTime, mx, mouseY);
+    scheduleRender();
+});
+
+canvas.addEventListener("mouseleave", () => {
+    if (!panelDrag) canvas.style.cursor = "crosshair";
+    hoverTime = null;
+    zoomAnchorTime = null;
+    mouseY = -1;
+    tooltip.style.display = "none";
+    if (pinnedTime === null) selectedTime.textContent = "Hover over the chart to view snapshots for the selected products";
+    scheduleRender();
+});
+
+window.addEventListener("mousemove", (event) => {
+    if (!panelDrag) return;
+    if (Math.hypot(
+        event.clientX - panelDrag.startX,
+        event.clientY - panelDrag.startY
+    ) >= 5) {
+        panelDrag.moved = true;
+    }
+    if (!panelDrag.moved) return;
+    const rect = canvas.getBoundingClientRect();
+    const y = event.clientY - rect.top;
+    const targetIndex = panelIndexAtY(y);
+    if (targetIndex < 0 || targetIndex === panelDrag.index) return;
+    const [moved] = series.splice(panelDrag.index, 1);
+    series.splice(targetIndex, 0, moved);
+    panelDrag.index = targetIndex;
+    makeBookCards();
+    const selected = pinnedTime !== null ? pinnedTime : hoverTime;
+    if (selected !== null) updateDetails(selected);
+    scheduleRender();
+});
+
+window.addEventListener("mouseup", () => {
+    if (!panelDrag) return;
+    const completedDrag = panelDrag;
+    if (completedDrag.moved) {
+        savePanelOrder();
+    } else {
+        toggleFocusedProduct(completedDrag.key);
+    }
+    panelDrag = null;
+    canvas.style.cursor = "crosshair";
+    setTimeout(() => { suppressCanvasClick = false; }, 0);
+    scheduleRender();
+});
+
+canvas.addEventListener("click", (event) => {
+    if (suppressCanvasClick) {
+        suppressCanvasClick = false;
+        return;
+    }
+    if (!series.length || !baseX) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = event.clientX - rect.left;
+    const my = event.clientY - rect.top;
+    if (mx < LEFT || mx > width - RIGHT || my < TOP || my > height - AXIS_H) return;
+    const x = viewX || transform.rescaleX(baseX);
+    if (pinnedTime === null) {
+        const hit = snapshotHitForPointer(x, mx, my);
+        pinnedTime = hit.time;
+        pinnedProductKey = hit.item ? hit.item.key : null;
+        pinnedRowIndex = Number.isInteger(hit.index) ? hit.index : null;
+        // Pinning the crosshair must not recenter the highest-detail time window.
+        // The selected point becomes the anchor only when a later wheel event starts.
+        zoomAnchorTime = null;
+        hoverTime = pinnedTime;
+    } else {
+        pinnedTime = null;
+        pinnedProductKey = null;
+        pinnedRowIndex = null;
+        zoomAnchorTime = null;
+        hoverTime = snapshotHitForPointer(x, mx, my).time;
+    }
+    updateDetails(pinnedTime === null ? hoverTime : pinnedTime);
+    scheduleRender();
+});
+
+window.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() === "r") {
+        pinnedTime = null;
+        pinnedProductKey = null;
+        pinnedRowIndex = null;
+        zoomAnchorTime = null;
+        selectedTradeListKey = "";
+        transform = d3.zoomIdentity;
+        d3.select(canvas).call(zoom.transform, transform);
+        renderTradeListWindow();
+    }
+});
+
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+        resizeCanvas();
+        sizeExpandedTradeList();
+        const selected = pinnedTime !== null ? pinnedTime : hoverTime;
+        if (selected !== null) updateDetails(selected);
+    }, 80);
+});
+
+(function setupDivider() {
+    const divider = document.getElementById("divider");
+    let dragging = false;
+    divider.addEventListener("mousedown", (event) => {
+        dragging = true;
+        divider.classList.add("active");
+        document.body.style.cursor = "col-resize";
+        event.preventDefault();
+    });
+    window.addEventListener("mousemove", (event) => {
+        if (!dragging) return;
+        const appRect = document.getElementById("app").getBoundingClientRect();
+        const next = Math.max(300, Math.min(appRect.width * 0.58, appRect.right - event.clientX));
+        detailPanel.style.width = next + "px";
+        resizeCanvas();
+        sizeExpandedTradeList();
+        const selected = pinnedTime !== null ? pinnedTime : hoverTime;
+        if (selected !== null) updateDetails(selected);
+    });
+    window.addEventListener("mouseup", () => {
+        dragging = false;
+        divider.classList.remove("active");
+        document.body.style.cursor = "";
+    });
+})();
+
+let featherRuntimePromise = null;
+
+function ensureFeatherRuntime() {
+    if (featherRuntimePromise) return featherRuntimePromise;
+    featherRuntimePromise = (async () => {
+        if (typeof Arrow === "undefined") {
+            throw new Error("Failed to load Apache Arrow JS. Check your network connection");
+        }
+        const [lz4, zstd] = await Promise.all([
+            import("https://esm.sh/lz4js@0.2.0/es2022/lz4js.bundle.mjs"),
+            import("https://esm.sh/fzstd@0.1.1/es2022/fzstd.bundle.mjs")
+        ]);
+        const decompress = lz4.decompress || (lz4.default && lz4.default.decompress);
+        const decompressZstd = zstd.decompress || (zstd.default && zstd.default.decompress);
+        if (typeof decompress !== "function" || typeof decompressZstd !== "function") {
+            throw new Error("Failed to load the Feather compression decoders");
+        }
+
+        // Arrow IPC codec IDs: LZ4_FRAME = 0, ZSTD = 1.
+        Arrow.compressionRegistry.set(0, {
+            decode: (bytes) => new Uint8Array(decompress(bytes))
+        });
+        Arrow.compressionRegistry.set(1, {
+            decode: (bytes) => new Uint8Array(decompressZstd(bytes))
+        });
+        if (!Arrow.compressionRegistry.get(0)?.decode ||
+            !Arrow.compressionRegistry.get(1)?.decode) {
+            throw new Error("Failed to register the Apache Arrow compression decoders");
+        }
+        return Arrow;
+    })();
+    return featherRuntimePromise;
+}
+
+function firstVector(table, names) {
+    for (const name of names) {
+        const vector = table.getChild(name);
+        if (vector) return vector;
+    }
+    return null;
+}
+
+function timestampToString(value) {
+    const text = String(value);
+    if (/^\d{4}-\d{2}-\d{2}[ T]/.test(text)) return text;
+
+    let epochNs;
+    if (typeof value === "bigint") {
+        epochNs = value;
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+        const magnitude = Math.abs(value);
+        if (magnitude >= 1e17) epochNs = BigInt(Math.trunc(value));
+        else if (magnitude >= 1e14) epochNs = BigInt(Math.trunc(value * 1e3));
+        else if (magnitude >= 1e11) epochNs = BigInt(Math.trunc(value * 1e6));
+        else epochNs = BigInt(Math.trunc(value * 1e9));
+    } else if (value instanceof Date) {
+        epochNs = BigInt(value.getTime()) * 1000000n;
+    } else {
+        throw new Error("Unrecognized timestamp value: " + text);
+    }
+
+    const epochMs = epochNs / 1000000n;
+    const nanos = ((epochNs % 1000000000n) + 1000000000n) % 1000000000n;
+    const d = new Date(Number(epochMs));
+    const pad = (number, width = 2) => String(number).padStart(width, "0");
+    return pad(d.getUTCFullYear(), 4) + "-" + pad(d.getUTCMonth() + 1) + "-" +
+        pad(d.getUTCDate()) + " " + pad(d.getUTCHours()) + ":" +
+        pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds()) + "." +
+        nanos.toString().padStart(9, "0");
+}
+
+function timestampToAbsoluteMs(value) {
+    const parts = parseTimestampParts(String(value));
+    return parts ? parts.wholeMs + parts.nanoseconds / 1e6 : NaN;
+}
+
+function featherTableToRows(table, product) {
+    const dt = firstVector(table, ["dt", "dt_lc", "dt_exch"]);
+    const price = firstVector(table, ["price", "last_px"]);
+    const b1p = firstVector(table, ["b1p", "bid1_px"]);
+    const a1p = firstVector(table, ["a1p", "ask1_px"]);
+    const mid = table.getChild("mid");
+    if (!dt) throw new Error(product.file + " is missing a dt/dt_lc/dt_exch timestamp column");
+    if (!price) throw new Error(product.file + " is missing a price/last_px price column");
+    if (!b1p || !a1p) throw new Error(product.file + " is missing the best bid/ask price columns");
+    if (!table.numRows) throw new Error(product.file + " contains no data rows");
+
+    const rows = new Array(table.numRows);
+    for (let i = 0; i < table.numRows; i++) {
+        const bid = Number(b1p.get(i));
+        const ask = Number(a1p.get(i));
+        const dtText = timestampToString(dt.get(i));
+        rows[i] = {
+            dt: dtText,
+            price: Number(price.get(i)),
+            b1p: bid,
+            a1p: ask,
+            mid: mid ? Number(mid.get(i)) : (bid + ask) / 2,
+            _name: product.name,
+            _absoluteMs: timestampToAbsoluteMs(dtText),
+            _tradingDate: product.tradingDate || ""
+        };
+    }
+    return rows;
+}
+
+function featherTradeTableToRows(table, product) {
+    const contract = firstVector(table, ["contract", "symbol", "instrument"]);
+    const dt = firstVector(table, ["dt", "dt_lc", "dt_exch"]);
+    const instruction = firstVector(table, ["instruction", "instr", "order_instruction"]);
+    const priceTrd = firstVector(table, ["price_trd", "trade_price", "last_trd"]);
+    if (!contract) throw new Error(product.tradeFile + " is missing the contract column");
+    if (!dt) throw new Error(product.tradeFile + " is missing a dt/dt_lc/dt_exch timestamp column");
+    if (!instruction) throw new Error(product.tradeFile + " is missing the instruction column");
+    if (!priceTrd) throw new Error(product.tradeFile + " is missing the price_trd column");
+
+    const rows = new Array(table.numRows);
+    for (let i = 0; i < table.numRows; i++) {
+        const dtText = timestampToString(dt.get(i));
+        rows[i] = {
+            contract: String(contract.get(i)),
+            dt: dtText,
+            instruction: String(instruction.get(i)),
+            price_trd: Number(priceTrd.get(i)),
+            _name: String(contract.get(i)),
+            _absoluteMs: timestampToAbsoluteMs(dtText),
+            _tradingDate: product.tradingDate || ""
+        };
+    }
+    return rows;
+}
+
+async function parseFeatherBuffers(buffers, productFiles, tradeBuffers = []) {
+    const arrow = await ensureFeatherRuntime();
+    if (!arrow.compressionRegistry.get(0)?.decode ||
+        !arrow.compressionRegistry.get(1)?.decode) {
+        throw new Error("Apache Arrow compression decoders are unavailable");
+    }
+    const raw = { _trades: {} };
+    for (let i = 0; i < productFiles.length; i++) {
+        const configuredProduct = productFiles[i];
+        const baseProduct = ensureProduct(configuredProduct);
+        const product = { ...baseProduct, ...configuredProduct };
+        loadingMessage.textContent = "Parsing " + product.file + "...";
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        const table = arrow.tableFromIPC(new Uint8Array(buffers[i]));
+        raw[product.key] = featherTableToRows(table, product);
+        if (tradeBuffers[i]) {
+            loadingMessage.textContent = "Parsing " + product.tradeFile + "...";
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const tradeTable = arrow.tableFromIPC(new Uint8Array(tradeBuffers[i]));
+            raw._trades[product.key] = featherTradeTableToRows(tradeTable, product);
+        } else {
+            raw._trades[product.key] = [];
+        }
+    }
+    return raw;
+}
+
+function configuredProducts(selectedDate) {
+    const dataset = DATASETS[selectedDate];
+    if (!dataset) throw new Error("No data files are configured for " + selectedDate);
+    const keys = activeProductKeys.length ? new Set(activeProductKeys) : null;
+    return Object.entries(dataset).filter(([key, configured]) =>
+        !keys || keys.has(configured.key || key)
+    ).map(([key, configured]) => {
+        const product = ensureProduct({ ...configured, key: configured.key || key });
+        const mdFile = configured.mdFile || configured.file;
+        const tradeFile = configured.tradeFile || configured.file;
+        return {
+            ...product,
+            ...configured,
+            file: mdFile,
+            mdFile,
+            tradeFile,
+            tradingDate: selectedDate
+        };
+    });
+}
+
+async function loadFeatherUrls(selectedDate) {
+    const dataPath = "data/" + selectedDate.replaceAll("-", "/");
+    const productFiles = configuredProducts(selectedDate);
+    loadingMessage.textContent = "Reading the selected Feather files from " + dataPath + "...";
+    const buffers = await Promise.all(productFiles.map(async (product) => {
+        const fileUrl = dataPath + "/md/" + encodeURIComponent(product.mdFile || product.file);
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error(fileUrl + " HTTP " + response.status);
+        return response.arrayBuffer();
+    }));
+    const tradeBuffers = await Promise.all(productFiles.map(async (product) => {
+        const fileUrl = dataPath + "/trade/" + encodeURIComponent(product.tradeFile || product.file);
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error(fileUrl + " HTTP " + response.status);
+        return response.arrayBuffer();
+    }));
+    return parseFeatherBuffers(buffers, productFiles, tradeBuffers);
+}
+
+async function fetchArrayBuffer(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(url + " HTTP " + response.status);
+    return response.arrayBuffer();
+}
+
+function fileDescriptor(file, relativePath = "") {
+    return {
+        file,
+        path: String(relativePath || file.webkitRelativePath || file.name)
+            .replaceAll("\\", "/")
+    };
+}
+
+function updateSelectedFolderList() {
+    selectedFolderList.innerHTML = "";
+    if (!selectedFolderNames.length) {
+        const empty = document.createElement("div");
+        empty.className = "selected-folder-empty";
+        empty.textContent = "No folders selected";
+        selectedFolderList.appendChild(empty);
+    } else {
+        for (const name of selectedFolderNames) {
+            const item = document.createElement("div");
+            item.className = "selected-folder-item";
+            const label = document.createElement("span");
+            label.className = "selected-folder-name";
+            label.textContent = name;
+            label.title = name;
+            const removeButton = document.createElement("button");
+            removeButton.className = "remove-folder-button";
+            removeButton.type = "button";
+            removeButton.textContent = "Remove";
+            removeButton.dataset.folderName = name;
+            item.append(label, removeButton);
+            selectedFolderList.appendChild(item);
+        }
+    }
+    loadFoldersButton.disabled = !selectedFolderDescriptors.length;
+    clearFoldersButton.disabled = !selectedFolderDescriptors.length;
+}
+
+function addSelectedFolder(descriptors, folderName) {
+    const normalizedName = folderName || "Data Folder " + (selectedFolderNames.length + 1);
+    const prefix = normalizedName + "/";
+    const incoming = Array.from(descriptors, descriptor => ({
+        file: descriptor.file,
+        path: descriptor.path.startsWith(prefix)
+            ? descriptor.path
+            : prefix + descriptor.path
+    }));
+    selectedFolderDescriptors = selectedFolderDescriptors.filter(
+        descriptor => !descriptor.path.startsWith(prefix)
+    ).concat(incoming);
+    selectedFolderNames = selectedFolderNames.filter(name => name !== normalizedName);
+    selectedFolderNames.push(normalizedName);
+    updateSelectedFolderList();
+}
+
+function removeSelectedFolder(folderName) {
+    const prefix = folderName + "/";
+    selectedFolderDescriptors = selectedFolderDescriptors.filter(
+        descriptor => !descriptor.path.startsWith(prefix)
+    );
+    selectedFolderNames = selectedFolderNames.filter(name => name !== folderName);
+    updateSelectedFolderList();
+}
+
+function clearSelectedFolders() {
+    selectedFolderDescriptors = [];
+    selectedFolderNames = [];
+    updateSelectedFolderList();
+}
+
+function showFolderSelection() {
+    loading.style.display = "block";
+    loadingMessage.textContent = "Choose the data folders to display on the main chart";
+    filePickerMessage.textContent =
+        "Add one date folder at a time. When finished, click “Load Selected Folders.”";
+    filePicker.style.display = "block";
+    filePickerClose.style.display = series.length ? "block" : "none";
+    updateSelectedFolderList();
+}
+
+function closeFolderSelection() {
+    if (!series.length) return;
+    filePicker.style.display = "none";
+    loading.style.display = "none";
+}
+
+function descriptorsForDate(descriptors, selectedDate, allowUniqueFallback = true) {
+    const dataset = DATASETS[selectedDate];
+    const datePath = selectedDate.replaceAll("-", "/");
+    const dateFolderPath = "/" + selectedDate + "/";
+    const underscoredDatePath = "/" + selectedDate.replaceAll("-", "_") + "/";
+    const dayPath = "/" + selectedDate.slice(8, 10) + "/";
+    const findDescriptor = (filename, folderName) => {
+        const candidates = descriptors.filter(({ file }) =>
+            file.name.toLowerCase() === filename.toLowerCase()
+        );
+        return candidates.find(({ path }) =>
+            ("/" + path).includes("/" + datePath + "/" + folderName + "/")
+        ) || candidates.find(({ path }) =>
+            ("/" + path).includes(dateFolderPath) && ("/" + path).includes("/" + folderName + "/")
+        ) || candidates.find(({ path }) =>
+            ("/" + path).includes(underscoredDatePath) && ("/" + path).includes("/" + folderName + "/")
+        ) || candidates.find(({ path }) =>
+            ("/" + path).includes(dayPath) && ("/" + path).includes("/" + folderName + "/")
+        ) || (allowUniqueFallback && candidates.length === 1 ? candidates[0] : null);
+    };
+    const selected = Object.entries(dataset).flatMap(([key, expected]) => {
+        const product = ensureProduct({ ...expected, key: expected.key || key });
+        if (!expected) return [];
+        const mdFile = expected.mdFile || expected.file;
+        const tradeFile = expected.tradeFile || expected.file;
+        const descriptor = findDescriptor(mdFile, "md");
+        const tradeDescriptor = findDescriptor(tradeFile, "trade");
+        if (!descriptor || !tradeDescriptor) return [];
+        return [{
+            product: {
+                ...product,
+                ...expected,
+                file: mdFile,
+                mdFile,
+                tradeFile,
+                tradingDate: selectedDate
+            },
+            file: descriptor.file,
+            tradeFile: tradeDescriptor.file
+        }];
+    });
+    if (!selected.length) throw new Error("No matching Feather files were found for " + selectedDate);
+    return selected;
+}
+
+function pathSegments(path) {
+    return String(path || "").replaceAll("\\", "/").split("/").filter(Boolean);
+}
+
+function descriptorHasSegment(descriptor, segment) {
+    return pathSegments(descriptor.path).some(part => part.toLowerCase() === segment.toLowerCase());
+}
+
+function descriptorDate(descriptor) {
+    const segments = pathSegments(descriptor.path);
+    const joined = "/" + segments.join("/") + "/";
+    for (const date of Object.keys(DATASETS).sort()) {
+        const [year, month, day] = date.split("-");
+        if (joined.includes("/" + year + "/" + month + "/" + day + "/") ||
+            joined.includes("/" + date + "/") ||
+            joined.includes("/" + year + "_" + month + "_" + day + "/")) {
+            return date;
+        }
+    }
+
+    const numericSegments = new Set(segments.filter(part => /^\d{1,2}$/.test(part)).map(part =>
+        part.padStart(2, "0")
+    ));
+    const fileName = descriptor.file.name.toLowerCase();
+    const matches = Object.keys(DATASETS).filter(date => {
+        const day = date.slice(8, 10);
+        if (!numericSegments.has(day)) return false;
+        const dataset = DATASETS[date] || {};
+        return Object.values(dataset).some(entry =>
+            String(entry.mdFile || entry.file).toLowerCase() === fileName ||
+            String(entry.tradeFile || entry.file).toLowerCase() === fileName
+        );
+    }).sort();
+    return matches[0] || "";
+}
+
+function selectedFolderEntriesByDate(descriptors) {
+    const byDate = {};
+    const mdDescriptors = descriptors.filter(descriptor => descriptorHasSegment(descriptor, "md"));
+    const tradeDescriptors = descriptors.filter(descriptor => descriptorHasSegment(descriptor, "trade"));
+
+    for (const mdDescriptor of mdDescriptors) {
+        const date = descriptorDate(mdDescriptor);
+        if (!date) continue;
+        const dataset = DATASETS[date] || {};
+        const configured = Object.values(dataset).find(entry => {
+            const mdFile = String(entry.mdFile || entry.file).toLowerCase();
+            return mdFile === mdDescriptor.file.name.toLowerCase();
+        });
+        const baseProduct = ensureProduct(configured || {
+            key: productKeyFromFilename(mdDescriptor.file.name),
+            name: productNameFromFilename(mdDescriptor.file.name),
+            file: mdDescriptor.file.name,
+            mdFile: mdDescriptor.file.name,
+            tradeFile: mdDescriptor.file.name
+        });
+
+        const tradeDescriptor = tradeDescriptors.find(candidate =>
+            candidate.file.name.toLowerCase() === mdDescriptor.file.name.toLowerCase() &&
+            descriptorDate(candidate) === date
+        );
+        if (!tradeDescriptor) continue;
+
+        const mdFile = mdDescriptor.file.name;
+        const tradeFile = tradeDescriptor.file.name;
+        (byDate[date] ||= []).push({
+            product: {
+                ...baseProduct,
+                ...(configured || {}),
+                name: configured
+                    ? configured.name
+                    : mdFile.replace(/\.feather$/i, "").split("-", 1)[0],
+                file: mdFile,
+                mdFile,
+                tradeFile,
+                tradingDate: date
+            },
+            file: mdDescriptor.file,
+            tradeFile: tradeDescriptor.file
+        });
+    }
+    return byDate;
+}
+
+function candidateDatesFromDescriptors(descriptors) {
+    const directorySegments = new Set();
+    for (const descriptor of descriptors) {
+        const segments = pathSegments(descriptor.path);
+        segments.slice(0, -1).forEach(segment => directorySegments.add(segment));
+    }
+    const has = value => directorySegments.has(value);
+    return Object.keys(DATASETS).filter(date => {
+        const [year, month, day] = date.split("-");
+        return (has(year) && has(month) && has(day)) ||
+            has(date) ||
+            has(year + "_" + month + "_" + day) ||
+            has(day) ||
+            (has(month) && !Array.from(directorySegments).some(segment =>
+                /^\d{1,2}$/.test(segment) && segment.padStart(2, "0") !== month
+            ));
+    }).sort();
+}
+
+function selectedFeatherDates(files, explicitDate = "") {
+    const fileNames = Array.from(files, file => file.name.toLowerCase());
+    const matchingDates = Object.keys(DATASETS).filter(date => {
+        const dataset = DATASETS[date] || {};
+        return fileNames.every(fileName =>
+            Object.values(dataset).some(entry =>
+                String(entry.mdFile || entry.file).toLowerCase() === fileName
+            )
+        );
+    }).sort();
+    if (explicitDate && matchingDates.includes(explicitDate)) return [explicitDate];
+    return matchingDates;
+}
+
+async function loadSelectedFeatherFiles(files, selectedDate = "") {
+    const resolvedDates = selectedFeatherDates(files, selectedDate);
+    if (!resolvedDates.length || window.location.protocol === "file:") {
+        throw new Error("Select a data date folder, or run the startup script and select md files so the corresponding trade files can be loaded automatically");
+    }
+    const selectedFileNames = Array.from(files, file => file.name.toLowerCase());
+    const selectedKeys = [];
+    for (const file of Array.from(files)) {
+        const entry = Object.values(DATASETS).flatMap(dataset => Object.values(dataset)).find(configured =>
+            String(configured.mdFile || configured.file).toLowerCase() === file.name.toLowerCase()
+        );
+        const baseProduct = ensureProduct(entry || {
+            key: productKeyFromFilename(file.name),
+            name: productNameFromFilename(file.name),
+            file: file.name,
+            mdFile: file.name,
+            tradeFile: file.name
+        });
+        if (!selectedKeys.includes(baseProduct.key)) selectedKeys.push(baseProduct.key);
+    }
+    activeProductKeys = selectedKeys;
+
+    const combined = { _trades: {} };
+    for (const date of resolvedDates) {
+        const dataset = DATASETS[date] || {};
+        const selected = selectedKeys.flatMap(key => {
+            const baseProduct = PRODUCTS.find(product => product.key === key);
+            const configured = Object.entries(dataset).find(([entryKey, entry]) =>
+                (entry.key || entryKey) === key
+            )?.[1];
+            if (!baseProduct || !configured) return [];
+            const mdFile = configured.mdFile || configured.file;
+            if (!selectedFileNames.includes(String(mdFile).toLowerCase())) return [];
+            const tradeFile = configured.tradeFile || configured.file;
+            return [{
+                ...baseProduct,
+                ...configured,
+                file: mdFile,
+                mdFile,
+                tradeFile,
+                tradingDate: date
+            }];
+        });
+        if (!selected.length) continue;
+
+        loadingMessage.textContent = "Reading the selected md Feather files and matching trade files for " + date + "...";
+        const dataPath = "data/" + date.replaceAll("-", "/");
+        const buffers = await Promise.all(selected.map(product =>
+            fetchArrayBuffer(dataPath + "/md/" + encodeURIComponent(product.mdFile))
+        ));
+        const tradeBuffers = await Promise.all(selected.map(product =>
+            fetchArrayBuffer(dataPath + "/trade/" + encodeURIComponent(product.tradeFile))
+        ));
+        const raw = await parseFeatherBuffers(buffers, selected, tradeBuffers);
+        for (const product of productsInRaw(raw)) {
+            combined[product.key] = (combined[product.key] || []).concat(raw[product.key]);
+            combined._trades[product.key] = (combined._trades[product.key] || []).concat(
+                (raw._trades && raw._trades[product.key]) || []
+            );
+        }
+    }
+    if (!productsInRaw(combined).length) {
+        throw new Error("No trade data was found for the selected md files");
+    }
+    return combined;
+}
+
+async function collectDirectoryFiles(directoryHandle, parentPath = "") {
+    const descriptors = [];
+    for await (const entry of directoryHandle.values()) {
+        const path = parentPath ? parentPath + "/" + entry.name : entry.name;
+        if (entry.kind === "directory") {
+            const nested = await collectDirectoryFiles(entry, path);
+            for (const descriptor of nested) descriptors.push(descriptor);
+        } else if (entry.name.toLowerCase().endsWith(".feather")) {
+            descriptors.push(fileDescriptor(await entry.getFile(), path));
+        }
+    }
+    return descriptors;
+}
+
+async function loadSelectedDataFolder(filesOrDescriptors) {
+    const descriptors = Array.from(filesOrDescriptors, entry =>
+        entry.file && entry.path ? entry : fileDescriptor(entry)
+    );
+    if (!descriptors.length) {
+        throw new Error("The selected folder contains no Feather files");
+    }
+    mergeDatasetsFromDescriptors(descriptors);
+
+    DATA_CACHE.clear();
+    activeProductKeys = [];
+    tradeListProductFilter = "all";
+    tradeListTimeFilter = null;
+    selectedTradeListKey = "";
+
+    const loadedDates = [];
+    const loadedProductKeys = new Set();
+    const selectedByDate = selectedFolderEntriesByDate(descriptors);
+    const selectedDates = Object.keys(selectedByDate).sort();
+    const inferredDates = candidateDatesFromDescriptors(descriptors);
+    const datesToLoad = selectedDates.length
+        ? selectedDates
+        : (inferredDates.length ? inferredDates : Object.keys(DATASETS).sort());
+    const errors = [];
+
+    for (const selectedDate of datesToLoad) {
+        try {
+            let raw;
+            let selected = selectedByDate[selectedDate];
+            if (selected) {
+                loadingMessage.textContent = "Reading the selected Feather files for " + selectedDate + "...";
+                const buffers = await Promise.all(selected.map(entry => entry.file.arrayBuffer()));
+                const tradeBuffers = await Promise.all(selected.map(entry => entry.tradeFile.arrayBuffer()));
+                raw = await parseFeatherBuffers(
+                    buffers,
+                    selected.map(entry => entry.product),
+                    tradeBuffers
+                );
+            } else if (window.location.protocol !== "file:") {
+                loadingMessage.textContent = "Reading md/trade Feather files for " + selectedDate + " from the data directory...";
+                raw = await loadFeatherUrls(selectedDate);
+                selected = productsInRaw(raw).map(product => ({ product }));
+            } else {
+                selected = descriptorsForDate(descriptors, selectedDate, false);
+                loadingMessage.textContent = "Reading the selected Feather files for " + selectedDate + "...";
+                const buffers = await Promise.all(selected.map(entry => entry.file.arrayBuffer()));
+                const tradeBuffers = await Promise.all(selected.map(entry => entry.tradeFile.arrayBuffer()));
+                raw = await parseFeatherBuffers(
+                    buffers,
+                    selected.map(entry => entry.product),
+                    tradeBuffers
+                );
+            }
+            DATA_CACHE.set(selectedDate, raw);
+            selected.forEach(entry => loadedProductKeys.add(entry.product.key));
+            loadedDates.push(selectedDate);
+        } catch (error) {
+            errors.push(selectedDate + ": " + error.message);
+            console.warn(error.message);
+        }
+    }
+    if (!loadedDates.length) {
+        throw new Error(
+            "No recognizable Feather data was found in the selected folders" +
+            (errors.length ? "; " + errors.join("; ") : "")
+        );
+    }
+
+    activeProductKeys = Array.from(loadedProductKeys);
+    availableDates = loadedDates;
+    await loadConfiguredDates(loadedDates);
+}
+
+async function loadConfiguredDate(selectedDate) {
+    return loadConfiguredDates([selectedDate]);
+}
+
+async function loadConfiguredDates(selectedDates) {
+    const dates = normalizeSelectedDates(selectedDates);
+    if (!dates.length) throw new Error("Select at least one available date");
+    loading.style.display = "block";
+    filePicker.style.display = "none";
+    try {
+        const combined = { _trades: {} };
+        for (const selectedDate of dates) {
+            let raw = DATA_CACHE.get(selectedDate);
+            if (!raw) {
+                if (window.location.protocol === "file:") {
+                    throw new Error("Select the data folder containing " + selectedDate + " again");
+                }
+                raw = await loadFeatherUrls(selectedDate);
+                DATA_CACHE.set(selectedDate, raw);
+            }
+            for (const product of productsInRaw(raw)) {
+                if (activeProductKeys.length && !activeProductKeys.includes(product.key)) continue;
+                combined[product.key] = (combined[product.key] || []).concat(raw[product.key]);
+                combined._trades[product.key] = (combined._trades[product.key] || []).concat(
+                    (raw._trades && raw._trades[product.key]) || []
+                );
+            }
+        }
+        initialize(combined, dates, availableDates);
+    } catch (error) {
+        loadingMessage.textContent = "Failed to read Feather data: " + error.message;
+        filePicker.style.display = "block";
+        console.error(error);
+    }
+}
+
+async function initializeFromFileSelection(files) {
+    filePicker.style.display = "none";
+    try {
+        if (Array.from(files).some(file => file.webkitRelativePath)) {
+            await loadSelectedDataFolder(files);
+        } else {
+            const raw = await loadSelectedFeatherFiles(files);
+            const dates = findCommonDates(raw);
+            initialize(raw, dates.length ? [dates[dates.length - 1]] : [], dates);
+        }
+    } catch (error) {
+        loadingMessage.textContent = "Failed to read Feather data: " + error.message;
+        filePicker.style.display = "block";
+        console.error(error);
+    }
+}
+
+function initialize(raw, selectedDates = [], knownDates = null) {
+    if (raw) {
+        allRaw = raw;
+        activeProductKeys = productsInRaw(raw).map(product => product.key);
+        availableDates = knownDates || findCommonDates(raw);
+    }
+    const sourceRaw = allRaw;
+    if (!sourceRaw) return;
+    const dates = normalizeSelectedDates(selectedDates);
+    loading.style.display = "block";
+    filePicker.style.display = "none";
+    loadingMessage.textContent = "Building the time index for the selected products...";
+    setTimeout(() => {
+        try {
+            series = buildSeries(filterRawByDates(sourceRaw, dates));
+            if (focusedProductKey &&
+                !series.some(item => item.key === focusedProductKey)) {
+                focusedProductKey = null;
+            }
+            activeDataDates = dates.length ? dates : findCommonDates(sourceRaw);
+            activeDataDate = activeDataDates.length === 1 ? activeDataDates[0] : "";
+            const currentLocationDate = dataDate.value;
+            dataDate.value = activeDataDates.includes(currentLocationDate)
+                ? currentLocationDate
+                : (activeDataDates[activeDataDates.length - 1] || "");
+            updateDateControls();
+            hoverTime = null;
+            pinnedTime = null;
+            pinnedProductKey = null;
+            pinnedRowIndex = null;
+            zoomAnchorTime = null;
+            selectedTradeListKey = "";
+            transform = d3.zoomIdentity;
+            closeSnapshotSection();
+            loadPanelOrder();
+            loadingMessage.textContent = "Merging and deduplicating timestamps for the selected products...";
+            unionTimes = buildUnionTimes(series);
+            extent = [
+                unionTimes[0],
+                unionTimes[unionTimes.length - 1]
+            ];
+            configureDetailZoom();
+            makeBookCards();
+            resizeCanvas();
+            d3.select(canvas).property("__zoom", d3.zoomIdentity);
+            loading.style.display = "none";
+            updateDetails(extent[0]);
+            render();
+            updateTradeList();
+            if (pendingIntradayLocation &&
+                activeDataDates.includes(pendingIntradayLocation.date)) {
+                const location = pendingIntradayLocation;
+                pendingIntradayLocation = null;
+                locateIntradayPosition(location.date, location.startTime, location.endTime);
+            }
+        } catch (error) {
+            loadingMessage.textContent = "Failed to initialize the data: " + error.message;
+            dataDate.value = activeDataDates[activeDataDates.length - 1] || "";
+            if (!allRaw) {
+                filePicker.style.display = "block";
+            } else {
+                setTimeout(() => {
+                    loading.style.display = "none";
+                }, 1500);
+            }
+            console.error(error);
+        }
+    }, 30);
+}
+
+applyDatesButton.addEventListener("click", async () => {
+    const dates = checkedDates();
+    if (!dates.length) {
+        selectedTime.textContent = "Select at least one date for the main chart";
+        return;
+    }
+    tradeListTimeFilter = null;
+    await loadConfiguredDates(dates);
+});
+
+selectAllDatesButton.addEventListener("click", () => {
+    dateOptions.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.checked = true;
+    });
+    updateSelectedDatesSummary();
+});
+
+clearDatesButton.addEventListener("click", () => {
+    dateOptions.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.checked = false;
+    });
+    updateSelectedDatesSummary();
+});
+
+chooseFoldersButton.addEventListener("click", showFolderSelection);
+
+filePickerClose.addEventListener("click", closeFolderSelection);
+
+selectedFolderList.addEventListener("click", event => {
+    const button = event.target.closest(".remove-folder-button");
+    if (!button) return;
+    removeSelectedFolder(button.dataset.folderName);
+    loadingMessage.textContent = selectedFolderNames.length
+        ? "Kept " + selectedFolderNames.length + " folders"
+        : "Select the data folders to load";
+});
+
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && tradeListPanel.classList.contains("expanded")) {
+        toggleTradeListExpanded(false);
+        return;
+    }
+    if (event.key === "Escape" &&
+        loading.style.display !== "none" &&
+        filePicker.style.display !== "none") {
+        closeFolderSelection();
+    }
+});
+
+locateIntradayButton.addEventListener("click", requestIntradayLocation);
+viewFullDayButton.addEventListener("click", viewSelectedFullDay);
+
+intradayStartTime.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") requestIntradayLocation();
+});
+
+intradayEndTime.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") requestIntradayLocation();
+});
+
+featherFiles.addEventListener("change", async () => {
+    const files = featherFiles.files;
+    if (!files || !files.length) return;
+    await initializeFromFileSelection(files);
+    featherFiles.value = "";
+});
+
+featherFolder.addEventListener("change", async () => {
+    const files = featherFolder.files;
+    if (!files || !files.length) return;
+    const firstPath = files[0].webkitRelativePath || files[0].name;
+    const folderName = firstPath.split("/")[0] || "Data Folder";
+    addSelectedFolder(
+        Array.from(files, file => fileDescriptor(file, file.webkitRelativePath)),
+        folderName
+    );
+    featherFolder.value = "";
+});
+
+folderPickerButton.addEventListener("click", async () => {
+    if (window.location.protocol === "file:" ||
+        typeof window.showDirectoryPicker !== "function") {
+        featherFolder.click();
+        return;
+    }
+    try {
+        const directoryHandle = await window.showDirectoryPicker({ mode: "read" });
+        const descriptors = await collectDirectoryFiles(directoryHandle, directoryHandle.name);
+        if (!descriptors.length) {
+            loadingMessage.textContent = "No Feather files were found in " + directoryHandle.name;
+            return;
+        }
+        addSelectedFolder(descriptors, directoryHandle.name);
+        loadingMessage.textContent = "Added " + selectedFolderNames.length +
+            " folders. Add more folders or start loading.";
+    } catch (error) {
+        if (error && error.name === "AbortError") {
+            return;
+        }
+        loadingMessage.textContent = "Failed to read the folder: " + error.message;
+        console.error(error);
+    }
+});
+
+loadFoldersButton.addEventListener("click", async () => {
+    if (!selectedFolderDescriptors.length) {
+        loadingMessage.textContent = "Add at least one data folder first";
+        return;
+    }
+    filePicker.style.display = "none";
+    filePickerClose.style.display = "none";
+    try {
+        await loadSelectedDataFolder(selectedFolderDescriptors);
+    } catch (error) {
+        loadingMessage.textContent = "Failed to read Feather data: " + error.message;
+        filePicker.style.display = "block";
+        filePickerClose.style.display = series.length ? "block" : "none";
+        console.error(error);
+    }
+});
+
+clearFoldersButton.addEventListener("click", () => {
+    clearSelectedFolders();
+    loadingMessage.textContent = "Select the data folders to load";
+});
+
+updateSelectedFolderList();
+filePickerClose.style.display = "none";
+updateDateControls();
+resizeCanvas();
+if (window.location.protocol === "file:") {
+    loadingMessage.textContent = "Run the startup script, or add each data folder you want to load";
+    filePickerMessage.textContent =
+        "Add one date folder at a time, then click “Load Selected Folders.”";
+    filePicker.style.display = "block";
+} else {
+    (async () => {
+        try {
+            loadingMessage.textContent = "Scanning the data folder for available dates...";
+            const response = await fetch("/api/datasets", { cache: "no-store" });
+            if (!response.ok) throw new Error("Dataset manifest HTTP " + response.status);
+            const manifest = await response.json();
+            DATASETS = manifest.datasets || {};
+            refreshProductsFromDatasets();
+            if (!Object.keys(DATASETS).length) {
+                throw new Error("No recognizable Feather data was found under data/YYYY/MM/DD");
+            }
+            availableDates = [];
+            updateDateControls();
+            showFolderSelection();
+        } catch (error) {
+            loadingMessage.textContent = "Failed to scan the data: " + error.message;
+            filePicker.style.display = "block";
+            console.error(error);
+        }
+    })();
+}
+})();
+</script>
+</body>
+</html>
